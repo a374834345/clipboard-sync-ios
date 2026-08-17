@@ -92,137 +92,43 @@ struct ContentView: View {
     @State private var pasteInFlight: Bool = false
     @State private var pullInFlight:  Bool = false
     @State private var showTCCDeniedAlert: Bool = false
-    /// 自定义封面缓存（设置页换完后会刷新 settings.hasCustomCover，这里立刻更新显示）
-    @State private var coverUIImage: UIImage? = nil
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                LazyVStack(spacing: 0, pinnedViews: []) {
-                    coverBanner
-                    statusCard
-                    quickActionBar
-                    historyList
-                }
+            VStack(spacing: 0) {
+                statusCard
+                quickActionBar
+                historyList
             }
             .navigationTitle("剪贴板同步")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink {
                         SettingsView()
-                            .environmentObject(settings)
-                            .environmentObject(monitor)
-                            .environmentObject(network)
                     } label: {
                         Image(systemName: "gearshape")
                     }
                 }
             }
             .background(Color(.systemGroupedBackground))
-            .onAppear {
-                monitor.start(settings: settings, network: network)
-                Task { await monitor.refreshHistory() }
-                reloadCoverFromDisk()
-            }
-            .onChange(of: settings.hasCustomCover) { _, _ in
-                // 设置页封面更新/删除后同步刷新显示
-                reloadCoverFromDisk()
-            }
-            // 每次回到前台（从设置页切回来）也刷一次封面
-            .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
-                reloadCoverFromDisk()
-            }
-            .alert("剪贴板权限被拒绝", isPresented: $showTCCDeniedAlert) {
-                Button("去设置开启", role: .none) {
-                    if let url = URL(string: UIApplication.openSettingsURLString) {
-                        UIApplication.shared.open(url, options: [:], completionHandler: nil)
-                    }
-                }
-                Button("取消", role: .cancel) {}
-            } message: {
-                Text("之前你两次拒绝了「从其他 App 粘贴」的权限，所以系统禁止本 App 读取剪贴板。请在打开的设置页里找到「从其他 App 粘贴」，选择「允许」或「询问」，然后回 App 再点粘贴。")
-            }
         }
-    }
-
-    // MARK: - 顶部自定义封面（用户可以在设置页上传自己的图）
-    @ViewBuilder
-    private var coverBanner: some View {
-        if let ui = coverUIImage {
-            // 用户自定义封面
-            Image(uiImage: ui)
-                .resizable()
-                .scaledToFill()
-                .frame(maxWidth: .infinity)
-                .frame(height: 190)
-                .clipped()
-                .overlay(
-                    LinearGradient(
-                        colors: [.black.opacity(0.0), .black.opacity(0.22)],
-                        startPoint: .top, endPoint: .bottom
-                    )
-                )
-                .overlay(alignment: .bottomLeading) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "doc.on.clipboard")
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundStyle(.white)
-                        Text("剪贴板同步")
-                            .font(.system(size: 22, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
-                    }
-                    .padding(.horizontal, 18)
-                    .padding(.bottom, 14)
-                    .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
-                }
-        } else {
-            // 默认封面：渐变色 + 大图标
-            ZStack(alignment: .bottomLeading) {
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.24, green: 0.49, blue: 0.95),
-                        Color(red: 0.39, green: 0.28, blue: 0.95),
-                        Color(red: 0.65, green: 0.27, blue: 0.92),
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-
-                // 装饰圆
-                Circle()
-                    .fill(.white.opacity(0.12))
-                    .frame(width: 280, height: 280)
-                    .offset(x: 170, y: -120)
-                Circle()
-                    .fill(.white.opacity(0.09))
-                    .frame(width: 170, height: 170)
-                    .offset(x: -110, y: 110)
-
-                HStack(alignment: .center, spacing: 12) {
-                    Image(systemName: "doc.on.clipboard.fill")
-                        .font(.system(size: 40, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .shadow(color: .black.opacity(0.15), radius: 3, y: 2)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("剪贴板同步")
-                            .font(.system(size: 26, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
-                        Text("电脑 ⇌ 手机 · 无缝同步")
-                            .font(.subheadline)
-                            .foregroundStyle(.white.opacity(0.92))
-                    }
-                    Spacer()
-                }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 18)
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 190)
+        .onAppear {
+            monitor.start(settings: settings, network: network)
+            Task { await monitor.refreshHistory() }
         }
-    }
-
-    private func reloadCoverFromDisk() {
-        coverUIImage = settings.loadCoverImage()
+        .onChange(of: settings.autoMonitor) { _, enabled in
+            monitor.applyAutoMonitorSetting(enabled: enabled)
+        }
+        .alert("剪贴板权限被拒绝", isPresented: $showTCCDeniedAlert) {
+            Button("去设置开启", role: .none) {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url, options: [:], completionHandler: nil)
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("之前你两次拒绝了「从其他 App 粘贴」的权限，所以系统禁止本 App 读取剪贴板。请在打开的设置页里找到「从其他 App 粘贴」，选择「允许」或「询问」，然后回 App 再点粘贴。")
+        }
     }
 
     // MARK: - 顶部状态卡（右上角不再放粘贴按钮，移到底部）
@@ -260,7 +166,7 @@ struct ContentView: View {
         .background(Color(.secondarySystemGroupedBackground))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal)
-        .padding(.top, 14)
+        .padding(.top, 8)
     }
 
     // MARK: - 快捷按钮栏（左：拉取  右：粘贴）
