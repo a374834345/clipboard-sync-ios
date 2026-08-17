@@ -1,39 +1,45 @@
 import SwiftUI
 import UIKit
 
-/// 重置 TCC 剪贴板权限：用 sqlite3 直接删 /private/var/mobile/Library/TCC/TCC.db 里本 App 的 kTCCServicePasteboard 记录。
-/// TrollStore 安装的 App 是 platform-application + mobile 用户，有权读写自己的 TCC.db。
+/// 重置 TCC 剪贴板权限：用 libc popen() 调 sqlite3 CLI 删 TCC.db 里本 App 的 kTCCServicePasteboard 记录。
+/// Process / NSTask iOS 公开不可用，所以走 C 层。TrollStore App 有 platform-application 权限可调用 system()/popen()。
 enum TCCReset {
     static let tccDBPath = "/private/var/mobile/Library/TCC/TCC.db"
 
     /// 返回 (成功: Bool, 结果文案)
     static func resetPasteboard(bundleID: String) -> (Bool, String) {
-        // 安全起见不用动态库链接 sqlite3，用 subProcess 跑 sqlite3 CLI（iOS 自带，/usr/bin/sqlite3）
-        let p = Process()
-        let pipe = Pipe()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
-        // 删除两张可能表（access 和 access_overrides）里关于 bundleID + kTCCServicePasteboard 的记录
+        // 单引号转义（防 SQL 注入，虽然是本 App bundle id 不会有引号，但保险）
+        let safeID = bundleID.replacingOccurrences(of: "'", with: "''")
         let sql = """
-        DELETE FROM access WHERE service='kTCCServicePasteboard' AND client='\(bundleID)';
-        DELETE FROM access WHERE service='kTCCServicePasteboard' AND client LIKE '%\(bundleID)%';
-        DELETE FROM access_overrides WHERE service='kTCCServicePasteboard' AND bundle_id='\(bundleID)';
-        DELETE FROM admin WHERE service='kTCCServicePasteboard' AND subject LIKE '%\(bundleID)%';
+        DELETE FROM access WHERE service='kTCCServicePasteboard' AND client='\(safeID)';
+        DELETE FROM access WHERE service='kTCCServicePasteboard' AND client LIKE '%\(safeID)%';
+        DELETE FROM access_overrides WHERE service='kTCCServicePasteboard' AND bundle_id='\(safeID)';
+        DELETE FROM admin WHERE service='kTCCServicePasteboard' AND subject LIKE '%\(safeID)%';
+        SELECT changes();
         """
-        p.arguments = [tccDBPath, sql]
-        p.standardOutput = pipe
-        p.standardError  = pipe
-        do {
-            try p.run()
-            p.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let output = (String(data: data, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if p.terminationStatus == 0 {
-                return (true, output.isEmpty ? "✅ 已从 TCC.db 删除本 App 的剪贴板权限记录。" : "✅ 结果: \(output)")
-            } else {
-                return (false, "❌ sqlite3 退出码 \(p.terminationStatus): \(output)")
-            }
-        } catch {
-            return (false, "❌ 无法执行 sqlite3：\(error.localizedDescription)")
+        // 用 bash -c 执行 sqlite3，2>&1 合并 stderr 和 stdout 都抓回来
+        let cmd = "/usr/bin/sqlite3 '\(tccDBPath)' \"\(sql)\" 2>&1"
+        guard let fp = popen(cmd, "r") else {
+            return (false, "❌ popen() 失败，无法执行 sqlite3")
+        }
+        var data = Data()
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 2048)
+        defer { buffer.deallocate() }
+        while true {
+            let n = fread(buffer, 1, 2048, fp)
+            guard n > 0 else { break }
+            data.append(buffer, count: n)
+        }
+        // 注意：pclose 只调用一次（不要 defer 又手动调）
+        let status = pclose(fp)
+        let output = (String(data: data, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // WIFEXITED(status) && WEXITSTATUS(status) == 0 算成功
+        let exitedNormally = (status & 0x7F) == 0
+        let exitCode = (status >> 8) & 0xFF
+        if exitedNormally && exitCode == 0 {
+            return (true, output.isEmpty ? "✅ 已从 TCC.db 删除本 App 的剪贴板权限记录（请杀进程重开 App）。" : "✅ 结果: \(output)")
+        } else {
+            return (false, "❌ sqlite3 退出码 \(exitCode): \(output.isEmpty ? "(无输出)" : output)")
         }
     }
 }
