@@ -27,5 +27,17 @@
     <array>
         <string>com.clipboardsync.refresh</string>
     </array>
+
+    <!--
+      TrollStore 环境下私有 entitlement，用于消除 iOS 剪贴板访问横幅提示：
+      - read-automatic: 读取剪贴板无需用户确认，不显示顶部 banner
+      - allow-background-reading: 后台同样不弹 banner
+      注：这两个是系统级私有 entitlement，TrollStore/越狱环境 ldrebuild 后生效，
+          App Store 正常签名会被拒。
+    -->
+    <key>com.apple.pasteboard.read-automatic</key>
+    <true/>
+    <key>com.apple.pasteboard.allow-background-reading</key>
+    <true/>
 </dict>
 </plist>
