@@ -2,53 +2,42 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- TrollStore 安装所需的 entitlements：让 App 拥有更高权限，便于后台保活 -->
-
-    <!-- 允许跳过 App Store 验证 -->
+    <!-- ============ 基础必需 ============ -->
     <key>get-task-allow</key>
     <true/>
 
-    <!-- 允许后台运行 -->
-    <key>com.apple.developer.healthkit</key>
-    <false/>
-
-    <!-- 私有 API：允许持续后台运行（TrollStore 注入生效） -->
-    <key>com.apple.multitasking.unlimitedassertions</key>
-    <true/>
+    <!-- ============ 后台运行 ============ -->
     <key>com.apple.developer.background-modes</key>
     <array>
         <string>fetch</string>
         <string>processing</string>
         <string>remote-notification</string>
     </array>
-
-    <!-- 后台任务调度标识 -->
     <key>com.apple.developer.task-identifiers</key>
     <array>
         <string>com.clipboardsync.refresh</string>
     </array>
+    <key>com.apple.multitasking.unlimitedassertions</key>
+    <true/>
 
-    <!--
-      TrollStore 环境下私有 entitlement，用于消除 iOS 14+ 剪贴板访问横幅/对话框：
-      - com.apple.private.pasteboard.allow-automatic-access: iOS 17 SpringBoard 实际检查的 key，
-        让本 App 视为系统级可信，读取任何 App 写入的剪贴板都不弹横幅（最关键的一条）
-      - com.apple.pasteboard.read-automatic: 旧版 iOS 兼容
-      - com.apple.pasteboard.allow-background-reading: 后台读取同样不弹横幅
-      注：必须用 ldid -S<entitlements> 嵌入到二进制的 code signature 才生效，
-          仅放在 .entitlements 文件里 Xcode 不会注入（CODE_SIGNING_ALLOWED=NO 时）。
-    -->
+    <!-- ============ TrollStore 平台应用标识 ============ -->
+    <!-- platform-application: true 让系统把本 App 视为系统级 platform binary，
+         这是 TrollStore 应用使用任何 com.apple.private.* 私有 entitlement 的前置条件，
+         没有这条会被 AMFI 在进程启动时拒绝 (SIGKILL → 闪退) -->
+    <key>platform-application</key>
+    <true/>
+
+    <!-- ============ 剪贴板访问：消除"允许粘贴"横幅（核心）============ -->
+    <!-- iOS 17 SpringBoard 真正检查的 key：让本 App 视为系统级可信，
+         读取任何 App 写入的剪贴板都不弹横幅 -->
     <key>com.apple.private.pasteboard.allow-automatic-access</key>
     <true/>
+    <!-- 旧版兼容 -->
     <key>com.apple.pasteboard.read-automatic</key>
     <true/>
     <key>com.apple.pasteboard.allow-background-reading</key>
     <true/>
-
-    <!-- 让 TrollStore 视为本 App 有更高沙盒权限，可读取其他 App 的剪贴板 -->
-    <key>com.apple.private.security.container-required</key>
-    <false/>
-    <key>com.apple.private.security.no-container</key>
-    <true/>
+    <!-- TCC 数据库直接放行剪贴板权限 -->
     <key>com.apple.private.tcc.allow</key>
     <array>
         <string>kTCCServicePasteboard</string>
