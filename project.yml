@@ -46,9 +46,6 @@ targets:
           - com.clipboardsync.refresh
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
-        NSCameraUsageDescription: "拍摄照片作为 App 自定义封面（仅保存在本机，不上传任何服务器）"
-        NSPhotoLibraryUsageDescription: "从相册选择图片作为 App 自定义封面（仅保存在本机，不上传任何服务器）"
-        NSPhotoLibraryAddUsageDescription: "如需保存封面到相册时会请求授权"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.clipboardsync.app
