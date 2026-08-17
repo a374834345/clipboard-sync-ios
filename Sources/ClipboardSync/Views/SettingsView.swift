@@ -1,6 +1,5 @@
 import SwiftUI
 import UIKit
-import AudioToolbox
 
 /// TCC 剪贴板权限重置：动态加载 /usr/lib/libsqlite3.dylib，直接 C-API 调 sqlite3_exec。
 /// 不使用 Process / NSTask / popen — 这些在 iOS Swift SDK 里都被标记 unavailable（虽然运行时符号存在）。
@@ -74,204 +73,16 @@ enum TCCReset {
     }
 }
 
-// MARK: - 应用图标切换模型（SpringBoard 主屏图标，官方 Alternate Icons API）
-enum AlternateAppIcon: String, CaseIterable, Identifiable {
-    case primary   = "PrimaryIcon"
-    case blue      = "AppIcon-Blue"
-    case green     = "AppIcon-Green"
-    case orange    = "AppIcon-Orange"
-    case purple    = "AppIcon-Purple"
-    case pink      = "AppIcon-Pink"
-    case black     = "AppIcon-Black"
-    case white     = "AppIcon-White"
-
-    var id: String { rawValue }
-
-    /// 设置页按钮左上角颜色小方块的预览颜色（左→右渐变两个 RGB）
-    var gradient: (from: (r: CGFloat, g: CGFloat, b: CGFloat), to: (r: CGFloat, g: CGFloat, b: CGFloat)) {
-        switch self {
-        case .primary: return ((0.23, 0.49, 0.95), (0.39, 0.28, 0.95))
-        case .blue:    return ((0.00, 0.48, 1.00), (0.00, 0.25, 0.87))
-        case .green:   return ((0.20, 0.78, 0.35), (0.00, 0.59, 0.53))
-        case .orange:  return ((1.00, 0.58, 0.00), (1.00, 0.37, 0.23))
-        case .purple:  return ((0.69, 0.32, 0.87), (0.35, 0.34, 0.84))
-        case .pink:    return ((1.00, 0.18, 0.33), (1.00, 0.51, 0.67))
-        case .black:   return ((0.12, 0.12, 0.13), (0.24, 0.24, 0.26))
-        case .white:   return ((0.95, 0.95, 0.97), (0.88, 0.88, 0.92))
-        }
-    }
-
-    var label: String {
-        switch self {
-        case .primary: return "默认"
-        case .blue:    return "蓝"
-        case .green:   return "绿"
-        case .orange:  return "橙"
-        case .purple:  return "紫"
-        case .pink:    return "粉"
-        case .black:   return "黑"
-        case .white:   return "白"
-        }
-    }
-
-    /// 传 nil 给 setAlternateIconName 就恢复 primary
-    var setAlternateIconNameValue: String? {
-        switch self {
-        case .primary: return nil
-        default:       return rawValue
-        }
-    }
-
-    static func fromSpringBoardName(_ name: String?) -> AlternateAppIcon {
-        guard let n = name, let c = AlternateAppIcon(rawValue: n) else { return .primary }
-        return c
-    }
-}
-
-// MARK: - 预览切换按钮的结果触感/音效包装（对应 ContentView.PasteHaptic，独立实现避免跨文件依赖）
-enum PasteHapticWrapper {
-    static func pullSuccess() {
-        AudioServicesPlaySystemSound(1104)
-        let medium = UIImpactFeedbackGenerator(style: .medium)
-        medium.prepare()
-        medium.impactOccurred(intensity: 0.8)
-        let notif = UINotificationFeedbackGenerator()
-        notif.notificationOccurred(.success)
-    }
-    static func error() {
-        let notif = UINotificationFeedbackGenerator()
-        notif.notificationOccurred(.error)
-    }
-}
-
-// MARK: - 设置页里的图标预览（用 SwiftUI 画模拟 iOS 圆角图标 + 中心剪贴板图形，不读 Assets.xcassets）
-struct AppIconPreview: View {
-    let icon: AlternateAppIcon
-    var side: CGFloat = 62
-
-    var body: some View {
-        let c = icon.gradient
-        RoundedRectangle(cornerRadius: side * 0.23, style: .continuous)
-            .fill(
-                LinearGradient(
-                    colors: [
-                        Color(red: c.from.r, green: c.from.g, blue: c.from.b),
-                        Color(red: c.to.r,   green: c.to.g,   blue: c.to.b),
-                    ],
-                    startPoint: .topLeading, endPoint: .bottomTrailing
-                )
-            )
-            .frame(width: side, height: side)
-            .overlay(alignment: .center) {
-                Image(systemName: "doc.on.clipboard.fill")
-                    .font(.system(size: side * 0.55, weight: .semibold))
-                    .foregroundStyle(icon == .white ? Color(red: 0.31, green: 0.31, blue: 0.33) : .white)
-                    .shadow(color: .black.opacity(icon == .white ? 0.0 : 0.12), radius: 2, y: 1)
-            }
-            .overlay(
-                RoundedRectangle(cornerRadius: side * 0.23, style: .continuous)
-                    .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
-            )
-            .shadow(color: .black.opacity(0.09), radius: 3, y: 2)
-    }
-}
-
-@MainActor
-final class AppIconSwitcher: ObservableObject {
-    static let shared = AppIconSwitcher()
-
-    @Published var current: AlternateAppIcon = .primary
-    @Published var lastError: String? = nil
-
-    private init() { refresh() }
-
-    func refresh() {
-        let sbName = UIApplication.shared.alternateIconName
-        current = AlternateAppIcon.fromSpringBoardName(sbName)
-    }
-
-    func apply(_ next: AlternateAppIcon) async -> (Bool, String) {
-        guard UIApplication.shared.supportsAlternateIcons else {
-            return (false, "❌ 当前 iOS 环境不支持 Alternate Icons（应检查 Info.plist 中 CFBundleAlternateIcons）")
-        }
-        guard current != next else {
-            return (true, "当前已是 \(next.label) 图标")
-        }
-        do {
-            try await UIApplication.shared.setAlternateIconName(next.setAlternateIconNameValue)
-            current = next
-            return (true, "✅ 已切换到「\(next.label)」图标（请返回桌面查看）")
-        } catch {
-            let msg = "❌ 切换失败：\(error.localizedDescription)"
-            lastError = msg
-            return (false, msg)
-        }
-    }
-}
-
 struct SettingsView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var network: NetworkService
-    @StateObject private var iconSwitcher = AppIconSwitcher.shared
     @State private var testResult: String = ""
     @State private var testing: Bool = false
     @State private var tccResult: String = ""
     @State private var showRestartAlert: Bool = false
-    @State private var iconSwitchResult: String = ""
 
     var body: some View {
         Form {
-            // MARK: 切换应用图标（iPhone 桌面 SpringBoard 图标）
-            Section("切换应用图标（桌面图标）") {
-                Text("选择下方任一图标，点击立刻切换到该桌面图标（iPhone 主屏）。无需注销重启，官方 API 一秒生效。")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-
-                let cols = [GridItem(.adaptive(minimum: 78), spacing: 14)]
-                LazyVGrid(columns: cols, alignment: .center, spacing: 14) {
-                    ForEach(AlternateAppIcon.allCases) { icon in
-                        let isSelected = iconSwitcher.current == icon
-                        Button {
-                            Task {
-                                let (ok, msg) = await iconSwitcher.apply(icon)
-                                iconSwitchResult = msg
-                                if !ok { PasteHapticWrapper.error() }
-                                else { PasteHapticWrapper.pullSuccess() }
-                            }
-                        } label: {
-                            VStack(spacing: 6) {
-                                AppIconPreview(icon: icon)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                            .stroke(isSelected ? Color.accentColor : Color.clear,
-                                                    lineWidth: isSelected ? 2.5 : 0)
-                                    )
-                                    .overlay(alignment: .topTrailing) {
-                                        if isSelected {
-                                            Image(systemName: "checkmark.circle.fill")
-                                                .foregroundStyle(Color.white, Color.accentColor)
-                                                .font(.system(size: 20, weight: .bold))
-                                                .offset(x: 5, y: -5)
-                                                .shadow(color: .black.opacity(0.18), radius: 2, y: 1)
-                                        }
-                                    }
-                                Text(icon.label)
-                                    .font(.caption2)
-                                    .foregroundStyle(.primary)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.vertical, 6)
-
-                if !iconSwitchResult.isEmpty {
-                    Text(iconSwitchResult)
-                        .font(.caption)
-                        .foregroundStyle(iconSwitchResult.hasPrefix("✅") ? .green : .red)
-                }
-            }
-
             Section("服务器") {
                 TextField("服务器地址", text: $settings.serverURL)
                     .keyboardType(.URL)
