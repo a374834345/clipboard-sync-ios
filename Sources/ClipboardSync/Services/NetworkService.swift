@@ -5,7 +5,8 @@ import UIKit
 /// 网络服务：负责与电脑端服务器通信
 /// 对应 server.py 中的：
 ///   - POST /api/set     上传文字
-///   - GET  /api/get     拉取最新内容
+///   - GET  /raw         拉取纯文字（更快）
+///   - GET  /api/get     拉取完整 JSON（含 type/timestamp，备用）
 ///   - GET  /api/history 拉取历史
 final class NetworkService: ObservableObject {
     @Published var isUploading: Bool = false
@@ -18,10 +19,17 @@ final class NetworkService: ObservableObject {
 
     init() {
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 8
-        config.timeoutIntervalForResource = 15
-        // 允许 HTTP 明文（服务器非 HTTPS）
+        // 更短的超时 + HTTP 连接复用（Keep-Alive 默认开启）
+        config.timeoutIntervalForRequest = 4
+        config.timeoutIntervalForResource = 8
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.httpShouldUsePipelining = true
+        config.httpShouldSetCookies = false
         config.allowsCellularAccess = true
+        // 提升 HTTP 优先级，减少首包延迟
+        if #available(iOS 17.0, *) {
+            config.multipathServiceType = .handover
+        }
         session = URLSession(configuration: config)
     }
 
@@ -30,11 +38,12 @@ final class NetworkService: ObservableObject {
     @discardableResult
     func uploadText(_ text: String, serverURL: String) async -> Bool {
         guard !text.isEmpty else { return false }
-        let url = URL(string: "\(serverURL)/api/set")!
+        guard let url = URL(string: "\(serverURL)/api/set") else { return false }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.timeoutInterval = 8
+        req.setValue("Keep-Alive", forHTTPHeaderField: "Connection")
+        req.timeoutInterval = 4
 
         let ts = ISO8601DateFormatter().string(from: Date())
         let body = UploadRequest(type: "text", content: text, timestamp: ts)
@@ -80,30 +89,39 @@ final class NetworkService: ObservableObject {
         }
     }
 
-    /// 拉取服务器最新剪贴板内容
-    func fetchLatest(serverURL: String) async -> ClipboardPayload? {
-        let url = URL(string: "\(serverURL)/api/get")!
+    /// 拉取服务器最新剪贴板文字（用 /raw 纯文本接口，比 /api/get 少一次 JSON 解码，更快）
+    /// - Returns: 服务器最新文字内容，空或失败返回 nil
+    func fetchLatestRaw(serverURL: String) async -> String? {
+        guard let url = URL(string: "\(serverURL)/raw") else { return nil }
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
-        req.timeoutInterval = 8
+        req.setValue("Keep-Alive", forHTTPHeaderField: "Connection")
+        req.timeoutInterval = 3
 
         do {
             let (data, response) = try await session.data(for: req)
             guard let http = response as? HTTPURLResponse,
                   (200..<300).contains(http.statusCode) else { return nil }
-            let parsed = try? decoder.decode(ClipboardResponse.self, from: data)
-            return parsed?.current
+            let text = String(data: data, encoding: .utf8) ?? ""
+            return text.isEmpty ? nil : text
         } catch {
             return nil
         }
     }
 
+    /// 兼容：保留 fetchLatest，但内部改为走 /raw 再合成 ClipboardPayload
+    func fetchLatest(serverURL: String) async -> ClipboardPayload? {
+        guard let text = await fetchLatestRaw(serverURL: serverURL) else { return nil }
+        return ClipboardPayload(type: "text", content: text, timestamp: nil)
+    }
+
     /// 拉取历史记录
     func fetchHistory(serverURL: String, limit: Int = 30) async -> [HistoryEntry] {
-        let url = URL(string: "\(serverURL)/api/history?limit=\(limit)")!
+        guard let url = URL(string: "\(serverURL)/api/history?limit=\(limit)") else { return [] }
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
-        req.timeoutInterval = 8
+        req.setValue("Keep-Alive", forHTTPHeaderField: "Connection")
+        req.timeoutInterval = 4
 
         do {
             struct HistoryResponse: Codable {
@@ -119,9 +137,11 @@ final class NetworkService: ObservableObject {
         }
     }
 
-    /// 写入手机剪贴板
+    /// 写入手机剪贴板（同时设置 changeCount 避免被自己的监听器再上传回去）
     @MainActor
-    func setLocalClipboard(_ text: String) {
+    func setLocalClipboard(_ text: String, suppressChangeCount: inout Int?) {
         UIPasteboard.general.string = text
+        // UIPasteboard 的 changeCount 每写一次自增，下次检测到同值 + 同 changeCount 就跳过
+        suppressChangeCount = UIPasteboard.general.changeCount
     }
 }
