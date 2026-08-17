@@ -24,7 +24,19 @@ jobs:
         run: brew install xcodegen
 
       - name: Generate Xcode project
-        run: xcodegen generate
+        run: |
+          xcodegen generate
+          # xcodegen 默认生成 objectVersion=77（Xcode 16），老 Xcode 打不开。
+          # 强制降级 project.pbxproj 为 Xcode 14 兼容的 objectVersion=56
+          PBXPROJ="${SCHEME}.xcodeproj/project.pbxproj"
+          if [ -f "$PBXPROJ" ]; then
+            sed -i '' -E 's/(objectVersion = )[0-9]+/\156/' "$PBXPROJ"
+            sed -i '' -E 's/(archiveVersion = )[0-9]+/\11/' "$PBXPROJ"
+            # classes 区域加个兼容标记（SwiftUI/Xcode 15 build 需要）
+            sed -i '' -E 's/(classes = ){}/\1\n\t\t\t/' "$PBXPROJ" || true
+            echo "已降级工程格式："
+            head -n 5 "$PBXPROJ"
+          fi
 
       - name: Build Release (unsigned, iphoneos)
         run: |
