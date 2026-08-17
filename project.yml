@@ -47,53 +47,10 @@ targets:
           - com.clipboardsync.refresh
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
-        # Primary Icon + Alternate Icons（设置页随时切换）
-        CFBundleIcons:
-          CFBundlePrimaryIcon:
-            CFBundleIconName: PrimaryIcon
-            CFBundleIconFiles:
-              - PrimaryIcon
-            UIPrerenderedIcon: false
-          CFBundleAlternateIcons:
-            AppIcon-Blue:
-              CFBundleIconName: AppIcon-Blue
-              CFBundleIconFiles:
-                - AppIcon-Blue
-              UIPrerenderedIcon: false
-            AppIcon-Green:
-              CFBundleIconName: AppIcon-Green
-              CFBundleIconFiles:
-                - AppIcon-Green
-              UIPrerenderedIcon: false
-            AppIcon-Orange:
-              CFBundleIconName: AppIcon-Orange
-              CFBundleIconFiles:
-                - AppIcon-Orange
-              UIPrerenderedIcon: false
-            AppIcon-Purple:
-              CFBundleIconName: AppIcon-Purple
-              CFBundleIconFiles:
-                - AppIcon-Purple
-              UIPrerenderedIcon: false
-            AppIcon-Pink:
-              CFBundleIconName: AppIcon-Pink
-              CFBundleIconFiles:
-                - AppIcon-Pink
-              UIPrerenderedIcon: false
-            AppIcon-Black:
-              CFBundleIconName: AppIcon-Black
-              CFBundleIconFiles:
-                - AppIcon-Black
-              UIPrerenderedIcon: false
-            AppIcon-White:
-              CFBundleIconName: AppIcon-White
-              CFBundleIconFiles:
-                - AppIcon-White
-              UIPrerenderedIcon: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.clipboardsync.app
         PRODUCT_NAME: ClipboardSync
         INFOPLIST_FILE: Resources/Info.plist
         CODE_SIGN_ENTITLEMENTS: Resources/ClipboardSync.entitlements
-        ASSETCATALOG_COMPILER_APPICON_NAME: PrimaryIcon
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
