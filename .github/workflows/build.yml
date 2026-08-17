@@ -1,0 +1,70 @@
+name: Build IPA
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  SCHEME: ClipboardSync
+  PROJECT_DIR: .   # 仓库里 iOS_ClipboardSync 作为根目录
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          xcodebuild -version
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build Release (unsigned, iphoneos)
+        run: |
+          xcodebuild \
+            -project "${SCHEME}.xcodeproj" \
+            -scheme "${SCHEME}" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_ENTITLEMENTS="" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            -derivedDataPath build \
+            build 2>&1 | tee build.log
+          echo "=== 查找 .app 路径 ==="
+          find build/Build/Products -name "${SCHEME}.app" -type d || echo "未找到 .app"
+
+      - name: Package IPA
+        run: |
+          APP_PATH=$(find build/Build/Products -name "${SCHEME}.app" -type d | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "❌ 找不到 ${SCHEME}.app，打印构建日志末尾："
+            tail -n 80 build.log
+            exit 1
+          fi
+          rm -rf Payload
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          # 写入 TrollStore 元数据
+          : > "Payload/${SCHEME}.app/TrollStore.RoothideHash" || true
+          zip -rq "${SCHEME}.ipa" Payload
+          rm -rf Payload
+          ls -lh "${SCHEME}.ipa"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClipboardSync-ipa
+          path: ClipboardSync.ipa
+          retention-days: 30
