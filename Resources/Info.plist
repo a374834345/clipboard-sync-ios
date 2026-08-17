@@ -69,10 +69,22 @@
         <true/>
     </dict>
 
-    <!-- 剪贴板访问说明：iOS 14+ 读取剪贴板时第一次会询问，用户允许后横幅会减少/消失（TrollStore + 私有 entitlement 可完全不弹） -->
+    <!-- 剪贴板访问说明：iOS 14+ 读取剪贴板时第一次会询问 -->
     <key>NSPasteboardUsageDescription</key>
     <string>为了自动同步您的剪贴板内容到电脑，本 App 需要读取并写入剪贴板。</string>
     <key>NSUserTrackingUsageDescription</key>
     <string>用于剪贴板同步功能</string>
+
+    <!-- 跳转 App 的 URL scheme 白名单（iOS 9+，否则 canOpenURL 返回 false） -->
+    <key>LSApplicationQueriesSchemes</key>
+    <array>
+        <string>weixin</string>
+        <string>wechat</string>
+        <string>wxwork</string>
+        <string>wework</string>
+        <string>xianyu</string>
+        <string>idlefish</string>
+        <string>fleamarket</string>
+    </array>
 </dict>
 </plist>
