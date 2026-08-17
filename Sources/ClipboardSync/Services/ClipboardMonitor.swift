@@ -202,6 +202,8 @@ final class ClipboardMonitor: ObservableObject {
     // MARK: - 后台保活
 
     @objc private func appDidEnterBackground() {
+        // 如果用户关闭了自动监听（autoMonitor=false）→ 切后台什么都不做（避免读 string 触发 banner）
+        guard let autoMon = settings?.autoMonitor, autoMon else { return }
         // 申请后台运行时间
         bgTaskIdentifier = UIApplication.shared.beginBackgroundTask(withName: "ClipboardSyncBG") { [weak self] in
             self?.endBackgroundTask()
@@ -209,20 +211,27 @@ final class ClipboardMonitor: ObservableObject {
         // 后台使用更低频率的 timer
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 6.0, repeats: true) { [weak self] _ in
-            self?.checkOnce()
+            Task { @MainActor [weak self] in
+                self?.checkOnce()
+            }
         }
         RunLoop.main.add(timer!, forMode: .common)
     }
 
     @objc private func appWillEnterForeground() {
         endBackgroundTask()
-        startTimer()
-        // 前台恢复时立即检查一次
-        checkOnce()
+        // 只有 autoMonitor=true 才重新启前台 Timer（用户关掉了就不启，完全不读剪贴板，零横幅）
+        if let autoMon = settings?.autoMonitor, autoMon {
+            startTimer()
+            // autoMonitor 开着时才额外检查一次（用户已经明确选了自动监听，接受可能的横幅）
+            checkOnce()
+        }
+        // autoMonitor=false → 绝对不读剪贴板（用户要手动点「粘贴」）
     }
 
-    /// BGTaskScheduler 唤醒时触发
+    /// BGTaskScheduler 唤醒时触发（也只有开了自动监听才执行）
     @objc private func handleBackgroundTick() {
+        guard let autoMon = settings?.autoMonitor, autoMon else { return }
         checkOnce()
     }
 
