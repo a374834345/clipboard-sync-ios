@@ -1,10 +1,50 @@
 import SwiftUI
+import UIKit
+
+/// 重置 TCC 剪贴板权限：用 sqlite3 直接删 /private/var/mobile/Library/TCC/TCC.db 里本 App 的 kTCCServicePasteboard 记录。
+/// TrollStore 安装的 App 是 platform-application + mobile 用户，有权读写自己的 TCC.db。
+enum TCCReset {
+    static let tccDBPath = "/private/var/mobile/Library/TCC/TCC.db"
+
+    /// 返回 (成功: Bool, 结果文案)
+    static func resetPasteboard(bundleID: String) -> (Bool, String) {
+        // 安全起见不用动态库链接 sqlite3，用 subProcess 跑 sqlite3 CLI（iOS 自带，/usr/bin/sqlite3）
+        let p = Process()
+        let pipe = Pipe()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        // 删除两张可能表（access 和 access_overrides）里关于 bundleID + kTCCServicePasteboard 的记录
+        let sql = """
+        DELETE FROM access WHERE service='kTCCServicePasteboard' AND client='\(bundleID)';
+        DELETE FROM access WHERE service='kTCCServicePasteboard' AND client LIKE '%\(bundleID)%';
+        DELETE FROM access_overrides WHERE service='kTCCServicePasteboard' AND bundle_id='\(bundleID)';
+        DELETE FROM admin WHERE service='kTCCServicePasteboard' AND subject LIKE '%\(bundleID)%';
+        """
+        p.arguments = [tccDBPath, sql]
+        p.standardOutput = pipe
+        p.standardError  = pipe
+        do {
+            try p.run()
+            p.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = (String(data: data, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if p.terminationStatus == 0 {
+                return (true, output.isEmpty ? "✅ 已从 TCC.db 删除本 App 的剪贴板权限记录。" : "✅ 结果: \(output)")
+            } else {
+                return (false, "❌ sqlite3 退出码 \(p.terminationStatus): \(output)")
+            }
+        } catch {
+            return (false, "❌ 无法执行 sqlite3：\(error.localizedDescription)")
+        }
+    }
+}
 
 struct SettingsView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var network: NetworkService
     @State private var testResult: String = ""
     @State private var testing: Bool = false
+    @State private var tccResult: String = ""
+    @State private var showRestartAlert: Bool = false
 
     var body: some View {
         Form {
@@ -52,6 +92,55 @@ struct SettingsView: View {
                 Stepper("最小内容长度：\(settings.minLength)", value: $settings.minLength, in: 1...20)
             }
 
+            Section("剪贴板权限修复（点粘贴没用 / 总弹询问）") {
+                Text("系统 App 列表里找不到本 App？因为你之前拒绝了剪贴板权限，TCC 数据库只记录了拒绝态，所以系统设置不显示条目。点下面按钮就能把这条记录删掉，然后重启 App，再点粘贴时系统会重新弹「允许」对话框，这次点允许就会出现了。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+
+                let bundleID = Bundle.main.bundleIdentifier ?? "com.clipboardsync.app"
+
+                Button {
+                    let (ok, msg) = TCCReset.resetPasteboard(bundleID: bundleID)
+                    tccResult = msg
+                    if ok {
+                        showRestartAlert = true
+                    }
+                } label: {
+                    Label("重置剪贴板权限（删 TCC 记录）", systemImage: "arrow.counterclockwise.circle.fill")
+                        .foregroundStyle(Color.red)
+                }
+
+                Button {
+                    // 跳到系统「隐私与安全性 → 剪贴板」（iOS 通用设置入口）
+                    if let u = URL(string: "App-Prefs:root=Privacy&path=PASTEBOARD") {
+                        UIApplication.shared.open(u, options: [:], completionHandler: nil)
+                    } else if let u = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(u, options: [:], completionHandler: nil)
+                    }
+                } label: {
+                    Label("打开系统剪贴板隐私设置", systemImage: "hand.raised.slash")
+                }
+
+                Button {
+                    if let u = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(u, options: [:], completionHandler: nil)
+                    }
+                } label: {
+                    Label("打开本 App 系统设置页（如无则用上一项）", systemImage: "gearshape.2")
+                }
+
+                if !tccResult.isEmpty {
+                    Text(tccResult)
+                        .font(.caption)
+                        .foregroundStyle(tccResult.hasPrefix("✅") ? .green : .red)
+                }
+            }
+            .alert("请立即重启 App", isPresented: $showRestartAlert) {
+                Button("好，我去杀进程重开") { }
+            } message: {
+                Text("TCC 记录已经删除。iOS 进程运行时会缓存 TCC 权限结果，必须杀掉本 App 再打开，下次点「粘贴」时系统才会重新弹出「允许粘贴」对话框。\n\n之后如果再拒绝，随时可以回来点这个按钮再来一次。")
+            }
+
             Section("TrollStore 后台保活") {
                 Text("本应用已通过 TrollStore + ImmortalizerTS 保活。请确保已在 ImmortalizerTS 中将本应用添加到保活列表，并在系统设置中授予后台刷新权限。")
                     .font(.caption)
@@ -59,7 +148,7 @@ struct SettingsView: View {
 
                 if let url = URL(string: "App-Prefs:root=General&path=BACKGROUND_APP_REFRESH") {
                     Button("打开系统后台刷新设置") {
-                        UIApplication.shared.open(url)
+                        UIApplication.shared.open(url, options: [:], completionHandler: nil)
                     }
                 }
             }
