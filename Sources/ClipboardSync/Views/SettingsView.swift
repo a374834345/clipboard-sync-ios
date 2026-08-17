@@ -18,7 +18,8 @@ enum TCCReset {
     static func resetPasteboard(bundleID: String) -> (Bool, String) {
         // 1. 动态加载 libsqlite3
         guard let libHandle = dlopen("/usr/lib/libsqlite3.dylib", RTLD_NOW) else {
-            let err = String(cString: dlerror() ?? "unknown dlerror")
+            let cErr = dlerror()
+            let err = cErr != nil ? String(cString: cErr!) : "unknown dlerror"
             return (false, "❌ dlopen(libsqlite3.dylib) 失败: \(err)")
         }
         defer { dlclose(libHandle) }
