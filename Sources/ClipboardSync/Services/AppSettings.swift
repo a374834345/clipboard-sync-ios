@@ -11,6 +11,8 @@ final class AppSettings: ObservableObject {
     @AppStorage("minLength") var minLength: Int = 1
     @AppStorage("lastUploadedContent") var lastUploadedContent: String = ""
     @AppStorage("lastPulledTimestamp") var lastPulledTimestamp: String = ""
+    /// 底部快捷按钮顺序（rawValue 逗号分隔）：pull / wxwork / weixin / xianyu
+    @AppStorage("quickActionOrder") var quickActionOrderRaw: String = "pull,wxwork,weixin,xianyu"
 
     /// 规范化服务器地址：去除末尾斜杠
     var normalizedServerURL: String {
