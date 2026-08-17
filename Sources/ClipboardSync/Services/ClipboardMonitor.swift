@@ -9,6 +9,7 @@ import UIKit
 /// 2. 进入后台时启动 backgroundTask，继续运行直到系统挂起
 /// 3. 通过 BGTaskScheduler 周期性唤醒（详见 AppDelegate）
 /// 4. TrollStore + ImmortalizerTS 可延长后台运行时间
+@MainActor
 final class ClipboardMonitor: ObservableObject {
     @Published var monitoring: Bool = false
     @Published var lastCheckedAt: Date?
@@ -90,13 +91,12 @@ final class ClipboardMonitor: ObservableObject {
         // iOS 系统自身的剪贴板访问控制：第一次读取时若有 banner 提示，仍会返回内容
         currentClipboard = now
 
-        Task { [weak self] in
+        Task { @MainActor [weak self, weak settings, weak network] in
+            guard let self = self, let settings = settings, let network = network else { return }
             let ok = await network.uploadText(now, serverURL: settings.normalizedServerURL)
-            await MainActor.run {
-                if ok {
-                    settings.lastUploadedContent = now
-                    self?.currentClipboard = now
-                }
+            if ok {
+                settings.lastUploadedContent = now
+                self.currentClipboard = now
             }
         }
     }
