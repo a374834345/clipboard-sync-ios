@@ -16,20 +16,20 @@ enum TCCReset {
 
     /// 返回 (成功: Bool, 结果文案)
     static func resetPasteboard(bundleID: String) -> (Bool, String) {
-        // 1. 动态加载 libsqlite3
-        guard let libHandle = dlopen("/usr/lib/libsqlite3.dylib", RTLD_NOW) else {
-            let cErr = dlerror()
-            let err = cErr != nil ? String(cString: cErr!) : "unknown dlerror"
+        // 1. 动态加载 libsqlite3（用 Darwin.dlopen 系列，避免与自定义 @_silgen_name 冲突）
+        guard let libHandle = Darwin.dlopen("/usr/lib/libsqlite3.dylib", Darwin.RTLD_NOW) else {
+            let cErr = Darwin.dlerror()
+            let err: String = cErr != nil ? String(cString: cErr!) : "unknown dlerror"
             return (false, "❌ dlopen(libsqlite3.dylib) 失败: \(err)")
         }
-        defer { dlclose(libHandle) }
+        defer { _ = Darwin.dlclose(libHandle) }
 
-        // 2. 拿函数指针
-        guard let p_open = dlsym(libHandle, "sqlite3_open").map({ unsafeBitCast($0, to: sqlite3_open_t.self) }) else { return (false, "❌ 找不到 sqlite3_open") }
-        guard let p_close = dlsym(libHandle, "sqlite3_close").map({ unsafeBitCast($0, to: sqlite3_close_t.self) }) else { return (false, "❌ 找不到 sqlite3_close") }
-        guard let p_exec = dlsym(libHandle, "sqlite3_exec").map({ unsafeBitCast($0, to: sqlite3_exec_t.self) }) else { return (false, "❌ 找不到 sqlite3_exec") }
-        guard let p_changes = dlsym(libHandle, "sqlite3_changes").map({ unsafeBitCast($0, to: sqlite3_changes_t.self) }) else { return (false, "❌ 找不到 sqlite3_changes") }
-        guard let p_errmsg = dlsym(libHandle, "sqlite3_errmsg").map({ unsafeBitCast($0, to: sqlite3_errmsg_t.self) }) else { return (false, "❌ 找不到 sqlite3_errmsg") }
+        // 2. 拿函数指针（用 Darwin.dlsym 避免符号歧义）
+        guard let p_open  = Darwin.dlsym(libHandle, "sqlite3_open")  .map({ unsafeBitCast($0, to: sqlite3_open_t.self)  }) else { return (false, "❌ 找不到 sqlite3_open") }
+        guard let p_close = Darwin.dlsym(libHandle, "sqlite3_close") .map({ unsafeBitCast($0, to: sqlite3_close_t.self) }) else { return (false, "❌ 找不到 sqlite3_close") }
+        guard let p_exec  = Darwin.dlsym(libHandle, "sqlite3_exec")  .map({ unsafeBitCast($0, to: sqlite3_exec_t.self)  }) else { return (false, "❌ 找不到 sqlite3_exec") }
+        guard let p_changes = Darwin.dlsym(libHandle, "sqlite3_changes").map({ unsafeBitCast($0, to: sqlite3_changes_t.self) }) else { return (false, "❌ 找不到 sqlite3_changes") }
+        guard let p_errmsg  = Darwin.dlsym(libHandle, "sqlite3_errmsg") .map({ unsafeBitCast($0, to: sqlite3_errmsg_t.self)  }) else { return (false, "❌ 找不到 sqlite3_errmsg") }
 
         // 3. 单引号转义（SQL 注入防护）
         let safeID = bundleID.replacingOccurrences(of: "'", with: "''")
@@ -72,13 +72,6 @@ enum TCCReset {
         }
     }
 }
-
-// MARK: - libc dlopen/dlsym/dlclose/dlerror/RDLOPEN 桥接（Swift 不屏蔽这几个）
-@_silgen_name("dlopen") internal func dlopen(_ path: UnsafePointer<CChar>?, _ mode: Int32) -> UnsafeMutableRawPointer?
-@_silgen_name("dlsym") internal func dlsym(_ handle: UnsafeMutableRawPointer?, _ symbol: UnsafePointer<CChar>) -> UnsafeMutableRawPointer?
-@_silgen_name("dlclose") internal func dlclose(_ handle: UnsafeMutableRawPointer?) -> Int32
-@_silgen_name("dlerror") internal func dlerror() -> UnsafePointer<CChar>?
-private let RTLD_NOW: Int32 = 0x2
 
 struct SettingsView: View {
     @EnvironmentObject var settings: AppSettings
