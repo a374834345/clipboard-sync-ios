@@ -65,11 +65,12 @@ final class ClipboardMonitor: ObservableObject {
         self.network = network
         guard !monitoring else { return }
         monitoring = true
-        // 启动时先读一次 changeCount + 内容，避免启动时立即上传
+        // 启动时仅记录 changeCount（不读 .string，避免启动就弹"允许粘贴"横幅）
         lastChangeCount = UIPasteboard.general.changeCount
-        currentClipboard = UIPasteboard.general.string ?? ""
-        settings.lastUploadedContent = currentClipboard
-        startTimer()
+        // 根据设置决定是否启动自动轮询
+        if settings.autoMonitor {
+            startTimer()
+        }
     }
 
     func stop() {
@@ -78,11 +79,53 @@ final class ClipboardMonitor: ObservableObject {
         timer = nil
     }
 
+    /// autoMonitor 开关变化外部调用：启停 Timer
+    func applyAutoMonitorSetting(enabled: Bool) {
+        if enabled {
+            startTimer()
+        } else {
+            timer?.invalidate()
+            timer = nil
+        }
+    }
+
+    /// 用户手动点「粘贴」按钮：强制读取当前剪贴板 + 上传（不看 changeCount）
+    func manualPasteAndUpload() async {
+        guard let settings = settings,
+              let network = network,
+              settings.autoUploadEnabled else {
+            lastCheckedAt = Date()
+            return
+        }
+        lastCheckedAt = Date()
+        let pb = UIPasteboard.general
+        let now = pb.string ?? ""
+        // 记录本次 changeCount，避免 autoMonitor 如果启用后自触发上传
+        lastChangeCount = pb.changeCount
+        currentClipboard = now
+        // 空内容或长度不足
+        if now.isEmpty || now.count < settings.minLength { return }
+        // 相同跳过
+        if now == settings.lastUploadedContent { return }
+        let ok = await network.uploadText(now, serverURL: settings.normalizedServerURL)
+        if ok {
+            settings.lastUploadedContent = now
+            currentClipboard = now
+            PasteHaptic.copy()
+        } else {
+            PasteHaptic.error()
+        }
+    }
+
+    @Published var manualIsProcessing: Bool = false
+
     private func startTimer() {
         timer?.invalidate()
         let interval = settings?.checkInterval ?? 2.0
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            self?.checkOnce()
+            Task { @MainActor [weak self] in
+                self?.checkOnce()
+            }
         }
         // 加入 common runloop 模式，滑动时不停止
         RunLoop.main.add(timer!, forMode: .common)
