@@ -40,6 +40,7 @@ jobs:
 
       - name: Build Release (unsigned, iphoneos)
         run: |
+          set -eo pipefail
           xcodebuild \
             -project "${SCHEME}.xcodeproj" \
             -scheme "${SCHEME}" \
@@ -55,16 +56,30 @@ jobs:
             -derivedDataPath build \
             build 2>&1 | tee build.log
           echo "=== 查找 .app 路径 ==="
-          find build/Build/Products -name "${SCHEME}.app" -type d || echo "未找到 .app"
+          find build/Build/Products -name "${SCHEME}.app" -type d
 
       - name: Package IPA
         run: |
+          set -euo pipefail
           APP_PATH=$(find build/Build/Products -name "${SCHEME}.app" -type d | head -1)
           if [ -z "$APP_PATH" ]; then
             echo "❌ 找不到 ${SCHEME}.app，打印构建日志末尾："
-            tail -n 80 build.log
+            tail -n 120 build.log
             exit 1
           fi
+          # 确认 .app 内有可执行文件
+          EXEC="$APP_PATH/${SCHEME}"
+          if [ ! -f "$EXEC" ]; then
+            echo "❌ .app 存在但里面没有可执行文件 ${EXEC}（说明编译失败但 tee 吞了退出码）"
+            echo ".app 目录："
+            ls -lhR "$APP_PATH" | head -40
+            echo
+            echo "构建日志尾部："
+            tail -n 120 build.log
+            exit 1
+          fi
+          echo "✅ 找到 .app（大小 $(du -sh "$APP_PATH" | cut -f1)）"
+          file "$EXEC"
           rm -rf Payload
           mkdir -p Payload
           cp -R "$APP_PATH" Payload/
