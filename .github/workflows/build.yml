@@ -20,8 +20,12 @@ jobs:
           sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
           xcodebuild -version
 
-      - name: Install xcodegen
-        run: brew install xcodegen
+      - name: Install xcodegen and ldid
+        run: |
+          brew install xcodegen
+          # ldid 用于给未签名二进制嵌入 entitlements（TrollStore 必需，否则私有 entitlement 不生效）
+          brew install ldid
+          which ldid && ldid 2>&1 | head -1
 
       - name: Generate Xcode project
         run: |
@@ -80,6 +84,32 @@ jobs:
           fi
           echo "✅ 找到 .app（大小 $(du -sh "$APP_PATH" | cut -f1)）"
           file "$EXEC"
+
+          # ============================================================
+          # 关键：用 ldid 给可执行文件签名并嵌入 entitlements
+          # 没有这步，TrollStore 安装时不会自动应用我们的私有 entitlement
+          # （com.apple.private.pasteboard.allow-automatic-access 等），
+          # 结果就是 iOS 仍然把本 App 当普通 App，读剪贴板时弹横幅。
+          # ldid -S<file> 会做 ad-hoc 签名 + 嵌入 entitlements 到 Mach-O
+          # ============================================================
+          ENT_FILE="Resources/ClipboardSync.entitlements"
+          if [ -f "$ENT_FILE" ]; then
+            echo "=== 用 ldid 嵌入 entitlements ==="
+            echo "entitlements 内容："
+            cat "$ENT_FILE"
+            # 拷贝一份到 .app 里（TrollStore 备份用）
+            cp "$ENT_FILE" "$APP_PATH/${SCHEME}.entitlements"
+            # 给主可执行文件签名 + 嵌入 entitlements
+            ldid -S"$ENT_FILE" "$EXEC"
+            echo "=== 签名后二进制信息 ==="
+            codesign -d --entitlements - "$EXEC" 2>&1 | head -40 || true
+            # 给所有动态库/framework 也签名（如果有）
+            find "$APP_PATH" -name "*.dylib" -type f -exec ldid -S {} \; 2>/dev/null || true
+            find "$APP_PATH" -name "*.framework" -type d -exec sh -c 'ls "$1"/*.dylib 2>/dev/null | xargs -I{} ldid -S {}' _ {} \; 2>/dev/null || true
+          else
+            echo "⚠️  找不到 entitlements 文件 $ENT_FILE，跳过 ldid 签名"
+          fi
+
           rm -rf Payload
           mkdir -p Payload
           cp -R "$APP_PATH" Payload/
