@@ -145,7 +145,13 @@ struct ContentView: View {
             // 退出编辑模式：写回持久化
             if !isEditing { persistButtonOrder() }
         }
+        .onChange(of: settings.autoMonitor) { _, enabled in
+            // 用户在设置里切了自动监听开关 → 启停 Timer
+            monitor.applyAutoMonitorSetting(enabled: enabled)
+        }
     }
+
+    @State private var pasteInFlight: Bool = false
 
     // MARK: - 顶部状态卡
     private var statusCard: some View {
@@ -154,12 +160,32 @@ struct ContentView: View {
                 Circle()
                     .fill(monitor.monitoring ? Color.green : Color.gray)
                     .frame(width: 10, height: 10)
-                Text(monitor.monitoring ? "监听中" : "已停止")
+                Text(settings.autoMonitor ? "自动监听" : "手动模式")
                     .font(.headline)
                 Spacer()
-                if network.isUploading {
+                if pasteInFlight || network.isUploading {
                     ProgressView().scaleEffect(0.7)
                 }
+                // 「粘贴」按钮：点击才读取剪贴板并上传
+                Button {
+                    Task {
+                        pasteInFlight = true
+                        defer { pasteInFlight = false }
+                        await monitor.manualPasteAndUpload()
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "doc.on.clipboard.fill")
+                        Text("粘贴")
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.blue.opacity(0.15))
+                    .foregroundStyle(Color.blue)
+                    .clipShape(Capsule())
+                }
+                .disabled(pasteInFlight)
             }
             Text("当前剪贴板：")
                 .font(.caption)
@@ -271,7 +297,7 @@ struct ContentView: View {
             guard let url = act.openURL else { return }
             if UIApplication.shared.canOpenURL(url) {
                 PasteHaptic.copy()
-                UIApplication.shared.open(url)
+                await UIApplication.shared.open(url)
             } else {
                 PasteHaptic.error()
                 // 兜底：跳到 App Store（如果没有本地 scheme，就跳 AppStore 搜索页）
@@ -284,7 +310,7 @@ struct ContentView: View {
                 }
                 let escaped = search.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
                 if let store = URL(string: "https://apps.apple.com/cn/search?term=\(escaped)") {
-                    UIApplication.shared.open(store)
+                    await UIApplication.shared.open(store)
                 }
             }
         }
