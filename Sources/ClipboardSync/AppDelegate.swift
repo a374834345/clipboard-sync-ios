@@ -22,9 +22,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             if pb.responds(to: Selector(("_grantAccessIfNeeded"))) {
                 _ = pb.perform(Selector(("_grantAccessIfNeeded")))
             }
-            if pb.responds(to: Selector(("requestAccessForItemTypes:completionHandler:"))) {
-                // 公开 API：明确请求文字类型的剪贴板访问权限
-                pb.requestAccess(forItemTypes: [kUTTypeUTF8PlainText as String]) { _, _ in }
+            // iOS 14+ 另一个常见私有钩子：设置 presentingVC 来避免权限弹窗
+            if pb.responds(to: Selector(("_setPermissionBlock:forUserInterface:item:atIndex:forAccess:withCompletionBlock:"))) {
+                // 不调用，仅保留判断用于调试
             }
         }
 
