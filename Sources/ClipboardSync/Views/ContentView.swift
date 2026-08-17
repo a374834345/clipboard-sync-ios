@@ -56,35 +56,68 @@ enum QuickAction: String, CaseIterable, Identifiable, Codable {
 }
 
 // MARK: - 全局复制音效 & 触感反馈
-/// Paste 风格的"叮"声 + 轻震动：每次写入剪贴板或复制历史条目时调用
 enum PasteHaptic {
-    private static let lightImpact = UIImpactFeedbackGenerator(style: .light)
+    private static let lightImpact  = UIImpactFeedbackGenerator(style: .light)
     private static let mediumImpact = UIImpactFeedbackGenerator(style: .medium)
+    private static let rigidImpact  = UIImpactFeedbackGenerator(style: .rigid)
 
-    /// 写入剪贴板：播放系统"叮"(1104) + 震动 + 触感
+    /// 写入剪贴板：系统音 1104 + 轻震动
     static func copy() {
-        // 1104 = 系统按键点击音（类似 Paste App 复制的声音）
-        // 1105 = 键盘删除，1106 = 键盘输入
         AudioServicesPlaySystemSound(1104)
         lightImpact.prepare()
         lightImpact.impactOccurred()
     }
 
-    /// 拉取成功：更明显的"成功"反馈
+    /// 拉取成功
     static func pullSuccess() {
         AudioServicesPlaySystemSound(1104)
         mediumImpact.prepare()
         mediumImpact.impactOccurred(intensity: 0.8)
-        // 再叠一个轻提示
         let notif = UINotificationFeedbackGenerator()
         notif.notificationOccurred(.success)
     }
 
-    /// 重排或错误：中等力度
+    /// 错误反馈
     static func error() {
         let notif = UINotificationFeedbackGenerator()
         notif.notificationOccurred(.error)
     }
+
+    /// 按钮按下去的触感（硬按钮"咔哒"一声，按下瞬间调用）
+    static func pressDown() {
+        rigidImpact.prepare()
+        rigidImpact.impactOccurred(intensity: 0.55)
+    }
+
+    /// 按钮抬起的触感（软一点）
+    static func pressUp() {
+        lightImpact.prepare()
+        lightImpact.impactOccurred(intensity: 0.3)
+    }
+}
+
+// MARK: - 按钮按下的视觉反馈样式（缩放 + 暗色蒙层 + 触感）
+struct PressableButtonStyle: ButtonStyle {
+    var pressScale: CGFloat = 0.93
+    var pressedOpacity: Double = 0.75
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? pressScale : 1.0)
+            .opacity(configuration.isPressed ? pressedOpacity : 1.0)
+            .brightness(configuration.isPressed ? -0.06 : 0)
+            .animation(.easeInOut(duration: 0.08), value: configuration.isPressed)
+            .onChange(of: configuration.isPressed) { _, isPressed in
+                if isPressed {
+                    PasteHaptic.pressDown()
+                } else {
+                    PasteHaptic.pressUp()
+                }
+            }
+    }
+}
+extension ButtonStyle where Self == PressableButtonStyle {
+    static var pressable: PressableButtonStyle { .init() }
 }
 
 struct ContentView: View {
@@ -101,6 +134,8 @@ struct ContentView: View {
     @State private var dragOffset: CGSize = .zero
     /// 编辑模式（进入编辑模式才能拖）
     @State private var editing: Bool = false
+    /// TCC 权限被拒绝 Alert
+    @State private var showTCCDeniedAlert: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -149,6 +184,16 @@ struct ContentView: View {
             // 用户在设置里切了自动监听开关 → 启停 Timer
             monitor.applyAutoMonitorSetting(enabled: enabled)
         }
+        .alert("剪贴板权限被拒绝", isPresented: $showTCCDeniedAlert) {
+            Button("去设置开启", role: .none) {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url, options: [:], completionHandler: nil)
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("之前你两次拒绝了「从其他 App 粘贴」的权限，所以系统禁止本 App 读取剪贴板。请在打开的设置页里找到「从其他 App 粘贴」，选择「允许」或「询问」，然后回 App 再点粘贴。")
+        }
     }
 
     @State private var pasteInFlight: Bool = false
@@ -171,7 +216,10 @@ struct ContentView: View {
                     Task {
                         pasteInFlight = true
                         defer { pasteInFlight = false }
-                        await monitor.manualPasteAndUpload()
+                        let result = await monitor.manualPasteAndUpload()
+                        if result == .permissionDenied {
+                            showTCCDeniedAlert = true
+                        }
                     }
                 } label: {
                     HStack(spacing: 4) {
@@ -185,6 +233,7 @@ struct ContentView: View {
                     .foregroundStyle(Color.blue)
                     .clipShape(Capsule())
                 }
+                .buttonStyle(.pressable)
                 .disabled(pasteInFlight)
             }
             Text("当前剪贴板：")
@@ -275,7 +324,7 @@ struct ContentView: View {
             .gesture(dragGesture(for: act))
             .simultaneousGesture(longPressGesture(for: act))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable)  // 按下：缩放 + 暗色 + 咔哒触感
         .disabled(act == .pull && monitor.isPulling)
         .overlay {
             if act == .pull && monitor.isPulling {
@@ -284,23 +333,23 @@ struct ContentView: View {
         }
     }
 
-    /// 按钮点击行为
+    /// 按钮点击行为：企微/微信/闲鱼立即跳转（同步 open，秒切不用 async）
     private func handleAction(_ act: QuickAction) async {
         switch act {
         case .pull:
             await monitor.pullFromServer()
-            // 拉取成功 → 响"叮" + 震动（失败 monitor 会改 pullStatus）
             if monitor.pullStatus == "已写入剪贴板" || monitor.pullStatus == "已是最新" {
                 PasteHaptic.pullSuccess()
             }
         case .wxwork, .weixin, .xianyu:
             guard let url = act.openURL else { return }
             if UIApplication.shared.canOpenURL(url) {
+                // 用同步 completionHandler 版本，按下去就立刻切，零延迟
                 PasteHaptic.copy()
-                await UIApplication.shared.open(url)
+                UIApplication.shared.open(url, options: [:], completionHandler: nil)
             } else {
                 PasteHaptic.error()
-                // 兜底：跳到 App Store（如果没有本地 scheme，就跳 AppStore 搜索页）
+                // 兜底跳 App Store 搜索页
                 let search: String
                 switch act {
                 case .wxwork: search = "企业微信"
@@ -310,7 +359,7 @@ struct ContentView: View {
                 }
                 let escaped = search.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
                 if let store = URL(string: "https://apps.apple.com/cn/search?term=\(escaped)") {
-                    await UIApplication.shared.open(store)
+                    UIApplication.shared.open(store, options: [:], completionHandler: nil)
                 }
             }
         }
