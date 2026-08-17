@@ -89,31 +89,52 @@ final class ClipboardMonitor: ObservableObject {
         }
     }
 
-    /// 用户手动点「粘贴」按钮：强制读取当前剪贴板 + 上传（不看 changeCount）
-    func manualPasteAndUpload() async {
+    /// 手动粘贴的结果
+    enum ManualResult: String {
+        case ok             // 成功上传（或已相同）
+        case uploadFailed   // 网络失败
+        case contentTooShort// 内容为空 / 长度不足（正常情况，真的没复制东西）
+        case permissionDenied // TCC 拒绝导致读不到
+    }
+
+    /// 用户手动点「粘贴」按钮：强制读取当前剪贴板 + 上传
+    @discardableResult
+    func manualPasteAndUpload() async -> ManualResult {
         guard let settings = settings,
               let network = network,
               settings.autoUploadEnabled else {
             lastCheckedAt = Date()
-            return
+            return .ok
         }
         lastCheckedAt = Date()
         let pb = UIPasteboard.general
-        let now = pb.string ?? ""
+        let rawString = pb.string
+        let now = rawString ?? ""
         // 记录本次 changeCount，避免 autoMonitor 如果启用后自触发上传
         lastChangeCount = pb.changeCount
         currentClipboard = now
-        // 空内容或长度不足
-        if now.isEmpty || now.count < settings.minLength { return }
-        // 相同跳过
-        if now == settings.lastUploadedContent { return }
+
+        // TCC 拒绝启发式：hasStrings == true 但读到的是空/nil → 系统把内容截断了（权限拒绝）
+        if pb.hasStrings && now.isEmpty {
+            return .permissionDenied
+        }
+        if now.isEmpty || now.count < settings.minLength {
+            return .contentTooShort
+        }
+        if now == settings.lastUploadedContent {
+            // 和上次相同：不重复上传，但也响一声给用户反馈
+            PasteHaptic.copy()
+            return .ok
+        }
         let ok = await network.uploadText(now, serverURL: settings.normalizedServerURL)
         if ok {
             settings.lastUploadedContent = now
             currentClipboard = now
             PasteHaptic.copy()
+            return .ok
         } else {
             PasteHaptic.error()
+            return .uploadFailed
         }
     }
 
