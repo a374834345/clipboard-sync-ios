@@ -81,8 +81,62 @@ struct SettingsView: View {
     @State private var tccResult: String = ""
     @State private var showRestartAlert: Bool = false
 
+    // MARK: - 自定义封面状态
+    @State private var showImagePicker: Bool = false
+    @State private var showCameraPicker: Bool = false
+    @State private var pickerSource: PickerSource = .library
+    @State private var coverPreview: UIImage? = nil
+    @State private var coverSaveResult: String = ""
+
+    enum PickerSource { case library, camera }
+
     var body: some View {
         Form {
+            // MARK: 自定义 App 封面 Section
+            Section("自定义 App 封面") {
+                // 预览卡片
+                HStack {
+                    Spacer()
+                    coverPreviewCard
+                        .frame(maxWidth: .infinity)
+                    Spacer()
+                }
+                .listRowBackground(Color.clear)
+
+                if !coverSaveResult.isEmpty {
+                    Text(coverSaveResult)
+                        .font(.caption)
+                        .foregroundStyle(coverSaveResult.hasPrefix("✅") ? .green : .red)
+                }
+
+                Button {
+                    coverPreview = nil
+                    pickerSource = .library
+                    showImagePicker = true
+                } label: {
+                    Label("从相册选择图片", systemImage: "photo.on.rectangle.angled")
+                }
+
+                if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                    Button {
+                        coverPreview = nil
+                        pickerSource = .camera
+                        showCameraPicker = true
+                    } label: {
+                        Label("拍一张作为封面", systemImage: "camera.viewfinder")
+                    }
+                }
+
+                Button(role: .destructive) {
+                    let (ok, msg) = settings.deleteCustomCover()
+                    coverSaveResult = msg
+                    if ok { coverPreview = nil }
+                } label: {
+                    Label("恢复默认封面", systemImage: "arrow.uturn.backward.square.fill")
+                }
+                .disabled(!settings.hasCustomCover)
+            }
+
             Section("服务器") {
                 TextField("服务器地址", text: $settings.serverURL)
                     .keyboardType(.URL)
@@ -199,6 +253,78 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("设置")
+        .onAppear { if coverPreview == nil { coverPreview = settings.loadCoverImage() } }
+        .sheet(isPresented: $showImagePicker) {
+            ImagePicker { img in
+                guard let img = img else { return }
+                coverPreview = img
+                let (ok, msg) = settings.saveCoverImage(img)
+                coverSaveResult = msg
+                if !ok { coverPreview = settings.loadCoverImage() }
+            }
+        }
+        .fullScreenCover(isPresented: $showCameraPicker) {
+            CameraPicker { img in
+                guard let img = img else { return }
+                coverPreview = img
+                let (ok, msg) = settings.saveCoverImage(img)
+                coverSaveResult = msg
+                if !ok { coverPreview = settings.loadCoverImage() }
+            }
+        }
+    }
+
+    // MARK: - 封面预览小卡片
+    @ViewBuilder
+    private var coverPreviewCard: some View {
+        let (img, isDefault) = resolvePreview()
+        VStack(spacing: 8) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: isDefault
+                                ? [.blue.opacity(0.15), .indigo.opacity(0.25), .purple.opacity(0.2)]
+                                : [.clear],
+                            startPoint: .topLeading, endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(height: 200)
+
+                if let ui = img {
+                    Image(uiImage: ui)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(height: 200)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                        )
+                } else {
+                    VStack(spacing: 10) {
+                        Image(systemName: "doc.on.clipboard")
+                            .font(.system(size: 54, weight: .semibold))
+                            .foregroundStyle(.blue.opacity(0.75))
+                        Text("默认封面")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(height: 200)
+                }
+            }
+            .frame(height: 200)
+
+            Text(isDefault ? "（去下方选一张你自己的图片作为封面）" : "当前封面")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func resolvePreview() -> (UIImage?, isDefault: Bool) {
+        if let p = coverPreview { return (p, false) }
+        if let disk = settings.loadCoverImage() { return (disk, false) }
+        return (nil, true)
     }
 
     private func testConnection() async {
