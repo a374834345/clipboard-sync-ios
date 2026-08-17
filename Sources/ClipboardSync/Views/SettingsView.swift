@@ -1,48 +1,83 @@
 import SwiftUI
 import UIKit
 
-/// 重置 TCC 剪贴板权限：用 libc popen() 调 sqlite3 CLI 删 TCC.db 里本 App 的 kTCCServicePasteboard 记录。
-/// Process / NSTask iOS 公开不可用，所以走 C 层。TrollStore App 有 platform-application 权限可调用 system()/popen()。
+/// TCC 剪贴板权限重置：动态加载 /usr/lib/libsqlite3.dylib，直接 C-API 调 sqlite3_exec。
+/// 不使用 Process / NSTask / popen — 这些在 iOS Swift SDK 里都被标记 unavailable（虽然运行时符号存在）。
+/// TrollStore platform-application 环境下 /var/mobile/Library/TCC/TCC.db 可写。
 enum TCCReset {
     static let tccDBPath = "/private/var/mobile/Library/TCC/TCC.db"
 
+    // libsqlite3 C function signatures
+    private typealias sqlite3_open_t   = @convention(c) (UnsafePointer<CChar>?, UnsafeMutablePointer<OpaquePointer?>?) -> Int32
+    private typealias sqlite3_close_t  = @convention(c) (OpaquePointer?) -> Void
+    private typealias sqlite3_exec_t   = @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, (@convention(c) (UnsafeMutableRawPointer?, Int32, UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?, UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?) -> Int32)?, UnsafeMutableRawPointer?, UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?) -> Int32
+    private typealias sqlite3_changes_t = @convention(c) (OpaquePointer?) -> Int32
+    private typealias sqlite3_errmsg_t  = @convention(c) (OpaquePointer?) -> UnsafePointer<CChar>?
+
     /// 返回 (成功: Bool, 结果文案)
     static func resetPasteboard(bundleID: String) -> (Bool, String) {
-        // 单引号转义（防 SQL 注入，虽然是本 App bundle id 不会有引号，但保险）
+        // 1. 动态加载 libsqlite3
+        guard let libHandle = dlopen("/usr/lib/libsqlite3.dylib", RTLD_NOW) else {
+            let err = String(cString: dlerror() ?? "unknown dlerror")
+            return (false, "❌ dlopen(libsqlite3.dylib) 失败: \(err)")
+        }
+        defer { dlclose(libHandle) }
+
+        // 2. 拿函数指针
+        guard let p_open = dlsym(libHandle, "sqlite3_open").map({ unsafeBitCast($0, to: sqlite3_open_t.self) }) else { return (false, "❌ 找不到 sqlite3_open") }
+        guard let p_close = dlsym(libHandle, "sqlite3_close").map({ unsafeBitCast($0, to: sqlite3_close_t.self) }) else { return (false, "❌ 找不到 sqlite3_close") }
+        guard let p_exec = dlsym(libHandle, "sqlite3_exec").map({ unsafeBitCast($0, to: sqlite3_exec_t.self) }) else { return (false, "❌ 找不到 sqlite3_exec") }
+        guard let p_changes = dlsym(libHandle, "sqlite3_changes").map({ unsafeBitCast($0, to: sqlite3_changes_t.self) }) else { return (false, "❌ 找不到 sqlite3_changes") }
+        guard let p_errmsg = dlsym(libHandle, "sqlite3_errmsg").map({ unsafeBitCast($0, to: sqlite3_errmsg_t.self) }) else { return (false, "❌ 找不到 sqlite3_errmsg") }
+
+        // 3. 单引号转义（SQL 注入防护）
         let safeID = bundleID.replacingOccurrences(of: "'", with: "''")
-        let sql = """
-        DELETE FROM access WHERE service='kTCCServicePasteboard' AND client='\(safeID)';
-        DELETE FROM access WHERE service='kTCCServicePasteboard' AND client LIKE '%\(safeID)%';
-        DELETE FROM access_overrides WHERE service='kTCCServicePasteboard' AND bundle_id='\(safeID)';
-        DELETE FROM admin WHERE service='kTCCServicePasteboard' AND subject LIKE '%\(safeID)%';
-        SELECT changes();
-        """
-        // 用 bash -c 执行 sqlite3，2>&1 合并 stderr 和 stdout 都抓回来
-        let cmd = "/usr/bin/sqlite3 '\(tccDBPath)' \"\(sql)\" 2>&1"
-        guard let fp = popen(cmd, "r") else {
-            return (false, "❌ popen() 失败，无法执行 sqlite3")
+
+        // 4. 打开数据库
+        var db: OpaquePointer? = nil
+        let openRC = tccDBPath.withCString { cs in p_open(cs, &db) }
+        guard openRC == 0 /* SQLITE_OK */, let db = db else {
+            let err = db.flatMap { p_errmsg($0) }.map { String(cString: $0) } ?? "rc=\(openRC)"
+            return (false, "❌ 无法打开 TCC.db：\(err)")
         }
-        var data = Data()
-        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 2048)
-        defer { buffer.deallocate() }
-        while true {
-            let n = fread(buffer, 1, 2048, fp)
-            guard n > 0 else { break }
-            data.append(buffer, count: n)
+        defer { p_close(db) }
+
+        // 5. 逐条执行 DELETE SQL（分开执行便于累计 deleted 行数）
+        let statements: [String] = [
+            "DELETE FROM access WHERE service='kTCCServicePasteboard' AND client='\(safeID)';",
+            "DELETE FROM access WHERE service='kTCCServicePasteboard' AND client LIKE '%\(safeID)%';",
+            "DELETE FROM access_overrides WHERE service='kTCCServicePasteboard' AND bundle_id='\(safeID)';",
+            "DELETE FROM admin WHERE service='kTCCServicePasteboard' AND subject LIKE '%\(safeID)%';",
+        ]
+        var deleted: Int32 = 0
+        var errMsgs: [String] = []
+        for sql in statements {
+            let rc = sql.withCString { cs in p_exec(db, cs, nil, nil, nil) }
+            if rc == 0 {
+                deleted += p_changes(db)
+            } else {
+                let msg = p_errmsg(db).map { String(cString: $0) } ?? "rc=\(rc)"
+                errMsgs.append(msg)
+            }
         }
-        // 注意：pclose 只调用一次（不要 defer 又手动调）
-        let status = pclose(fp)
-        let output = (String(data: data, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        // WIFEXITED(status) && WEXITSTATUS(status) == 0 算成功
-        let exitedNormally = (status & 0x7F) == 0
-        let exitCode = (status >> 8) & 0xFF
-        if exitedNormally && exitCode == 0 {
-            return (true, output.isEmpty ? "✅ 已从 TCC.db 删除本 App 的剪贴板权限记录（请杀进程重开 App）。" : "✅ 结果: \(output)")
+        if errMsgs.isEmpty {
+            if deleted > 0 {
+                return (true, "✅ 已从 TCC.db 清除 \(deleted) 条剪贴板权限记录。请立刻杀进程重开 App，下次点「粘贴」会重新弹允许对话框。")
+            } else {
+                return (true, "✅ TCC.db 里已经没有本 App 的剪贴板权限记录（可能之前已经清过了）。请杀进程重开 App。")
+            }
         } else {
-            return (false, "❌ sqlite3 退出码 \(exitCode): \(output.isEmpty ? "(无输出)" : output)")
+            return (false, "❌ SQL 错误：\(errMsgs.joined(separator: "；"))")
         }
     }
 }
+
+// MARK: - libc dlopen/dlsym/dlclose/dlerror/RDLOPEN 桥接（Swift 不屏蔽这几个）
+@_silgen_name("dlopen") internal func dlopen(_ path: UnsafePointer<CChar>?, _ mode: Int32) -> UnsafeMutableRawPointer?
+@_silgen_name("dlsym") internal func dlsym(_ handle: UnsafeMutableRawPointer?, _ symbol: UnsafePointer<CChar>) -> UnsafeMutableRawPointer?
+@_silgen_name("dlclose") internal func dlclose(_ handle: UnsafeMutableRawPointer?) -> Int32
+@_silgen_name("dlerror") internal func dlerror() -> UnsafePointer<CChar>?
+private let RTLD_NOW: Int32 = 0x2
 
 struct SettingsView: View {
     @EnvironmentObject var settings: AppSettings
