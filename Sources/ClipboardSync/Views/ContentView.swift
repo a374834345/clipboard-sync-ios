@@ -2,69 +2,7 @@ import SwiftUI
 import AudioToolbox
 import UIKit
 
-// MARK: - 快捷按钮类型
-enum QuickAction: String, CaseIterable, Identifiable, Codable {
-    case pull      // 拉取
-    case wxwork    // 企业微信
-    case weixin    // 微信
-    case xianyu    // 闲鱼
 
-    var id: String { rawValue }
-
-    var icon: String {
-        switch self {
-        case .pull:   return "arrow.down.to.line.circle.fill"
-        case .wxwork: return "briefcase.circle.fill"
-        case .weixin: return "message.circle.fill"
-        case .xianyu: return "fish.circle.fill"
-        }
-    }
-
-    var title: String {
-        switch self {
-        case .pull:   return "拉取"
-        case .wxwork: return "企微"
-        case .weixin: return "微信"
-        case .xianyu: return "闲鱼"
-        }
-    }
-
-    var tint: Color {
-        switch self {
-        case .pull:   return .blue
-        case .wxwork: return .orange
-        case .weixin: return .green
-        case .xianyu: return .yellow
-        }
-    }
-
-    /// App Store 搜索兜底文案
-    var appStoreSearch: String {
-        switch self {
-        case .wxwork: return "企业微信"
-        case .weixin: return "微信"
-        case .xianyu: return "闲鱼"
-        case .pull:   return ""
-        }
-    }
-
-    /// 按顺序尝试多个 URL scheme（用户手机可能装的是不同版本，比如老版企微用 wxwork，新版用 wework）
-    var openURLCandidates: [URL] {
-        var arr: [URL] = []
-        switch self {
-        case .pull:   break
-        case .wxwork:
-            ["wxwork://dl/", "wxwork://", "wework://", "safepm://wxwork"].forEach { if let u = URL(string: $0) { arr.append(u) } }
-        case .weixin:
-            ["weixin://dl/", "weixin://", "wechat://"].forEach { if let u = URL(string: $0) { arr.append(u) } }
-        case .xianyu:
-            ["xianyu://", "idlefish://", "fleamarket://", "alipays://platformapi/startapp?appId=20000067"].forEach {
-                if let u = URL(string: $0) { arr.append(u) }
-            }
-        }
-        return arr
-    }
-}
 
 // MARK: - 全局复制音效 & 触感反馈
 enum PasteHaptic {
@@ -140,18 +78,9 @@ struct PressableEffect: ViewModifier {
     }
 }
 extension View {
+    /// 按下视觉：scale 0.94 + 变暗 + rigid 咔哒；抬起恢复 + 软咔哒
     func pressable(scale: CGFloat = 0.94, opacity: Double = 0.82) -> some View {
         self.modifier(PressableEffect(scale: scale, opacity: opacity))
-    }
-
-    /// SwiftUI 没内建的 if：条件为 true 才套用 transform，否则原样返回
-    @ViewBuilder
-    func `if`<Content: View>(_ condition: Bool, transform: (Self) -> Content) -> some View {
-        if condition {
-            transform(self)
-        } else {
-            self
-        }
     }
 }
 
@@ -160,16 +89,8 @@ struct ContentView: View {
     @EnvironmentObject var monitor: ClipboardMonitor
     @EnvironmentObject var network: NetworkService
 
-    /// 当前快捷按钮顺序（本地状态，拖拽中改它，松手回写 AppStorage）
-    @State private var actionOrder: [QuickAction] = [.pull, .wxwork, .weixin, .xianyu]
-
-    /// 拖拽重排：当前正被长按拖的按钮
-    @State private var dragging: QuickAction? = nil
-    /// 拖拽中的平移偏移
-    @State private var dragOffset: CGSize = .zero
-    /// 编辑模式（进入编辑模式才能拖）
-    @State private var editing: Bool = false
-    /// TCC 权限被拒绝 Alert
+    @State private var pasteInFlight: Bool = false
+    @State private var pullInFlight:  Bool = false
     @State private var showTCCDeniedAlert: Bool = false
 
     var body: some View {
@@ -182,25 +103,10 @@ struct ContentView: View {
             .navigationTitle("剪贴板同步")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 16) {
-                        Menu {
-                            Button(action: {
-                                withAnimation { editing.toggle() }
-                            }) {
-                                Label(editing ? "完成排序" : "调整按钮顺序",
-                                      systemImage: editing ? "checkmark" : "slider.horizontal.3")
-                            }
-                            Button(action: { resetButtonOrder() }) {
-                                Label("恢复默认顺序", systemImage: "arrow.counterclockwise")
-                            }
-                        } label: {
-                            Image(systemName: "line.3.horizontal.decrease.circle")
-                        }
-                        NavigationLink {
-                            SettingsView()
-                        } label: {
-                            Image(systemName: "gearshape")
-                        }
+                    NavigationLink {
+                        SettingsView()
+                    } label: {
+                        Image(systemName: "gearshape")
                     }
                 }
             }
@@ -208,15 +114,9 @@ struct ContentView: View {
         }
         .onAppear {
             monitor.start(settings: settings, network: network)
-            loadButtonOrder()
             Task { await monitor.refreshHistory() }
         }
-        .onChange(of: editing) { _, isEditing in
-            // 退出编辑模式：写回持久化
-            if !isEditing { persistButtonOrder() }
-        }
         .onChange(of: settings.autoMonitor) { _, enabled in
-            // 用户在设置里切了自动监听开关 → 启停 Timer
             monitor.applyAutoMonitorSetting(enabled: enabled)
         }
         .alert("剪贴板权限被拒绝", isPresented: $showTCCDeniedAlert) {
@@ -231,9 +131,7 @@ struct ContentView: View {
         }
     }
 
-    @State private var pasteInFlight: Bool = false
-
-    // MARK: - 顶部状态卡
+    // MARK: - 顶部状态卡（右上角不再放粘贴按钮，移到底部）
     private var statusCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -243,41 +141,16 @@ struct ContentView: View {
                 Text(settings.autoMonitor ? "自动监听" : "手动模式")
                     .font(.headline)
                 Spacer()
-                if pasteInFlight || network.isUploading {
+                if pasteInFlight || network.isUploading || pullInFlight {
                     ProgressView().scaleEffect(0.7)
                 }
-                // 「粘贴」按钮：点击才读取剪贴板并上传
-                Button {
-                    Task {
-                        pasteInFlight = true
-                        defer { pasteInFlight = false }
-                        let result = await monitor.manualPasteAndUpload()
-                        if result == .permissionDenied {
-                            showTCCDeniedAlert = true
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "doc.on.clipboard.fill")
-                        Text("粘贴")
-                    }
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(Color.blue.opacity(0.15))
-                    .foregroundStyle(Color.blue)
-                    .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .pressable(scale: 0.95, opacity: 0.85)
-                .disabled(pasteInFlight)
             }
             Text("当前剪贴板：")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Text(monitor.currentClipboard.isEmpty ? "（空）" : String(monitor.currentClipboard.prefix(80)))
+            Text(monitor.currentClipboard.isEmpty ? "（空）" : String(monitor.currentClipboard.prefix(120)))
                 .font(.caption)
-                .lineLimit(2)
+                .lineLimit(3)
                 .foregroundStyle(.secondary)
             HStack(spacing: 12) {
                 Label("拉取：\(monitor.pullStatus)", systemImage: "arrow.down.circle")
@@ -296,182 +169,93 @@ struct ContentView: View {
         .padding(.top, 8)
     }
 
-    // MARK: - 快捷按钮栏（一行 4 个图标 + 可长按拖拽重排）
+    // MARK: - 快捷按钮栏（左：拉取  右：粘贴）
     private var quickActionBar: some View {
         HStack(spacing: 12) {
-            ForEach(actionOrder) { act in
-                quickActionButton(act)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-    }
-
-    @ViewBuilder
-    private func quickActionButton(_ act: QuickAction) -> some View {
-        let isDragging = dragging == act
-
-        Button {
-            // 编辑模式下点按钮不执行操作（此时专门用来拖位置）
-            guard !editing else { return }
-            Task { await handleAction(act) }
-        } label: {
-            VStack(spacing: 4) {
-                Image(systemName: act.icon)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 34, height: 34)
-                    .foregroundStyle(act.tint)
-                    .background(
-                        Circle()
-                            .fill(act.tint.opacity(0.12))
-                            .frame(width: 56, height: 56)
-                    )
-                Text(act.title)
-                    .font(.caption2)
-                    .foregroundStyle(.primary)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
-            .background(Color(.secondarySystemGroupedBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(editing ? Color.orange.opacity(0.8) : Color.clear, lineWidth: 1.5)
-            )
-            .overlay(alignment: .topTrailing) {
-                if editing {
-                    Image(systemName: "line.3.horizontal")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 14, height: 14)
-                        .foregroundStyle(.white)
-                        .padding(4)
-                        .background(Circle().fill(.orange))
-                        .padding(4)
-                        .transition(.scale)
-                }
-            }
-            .scaleEffect(isDragging ? 1.15 : 1.0)
-            .shadow(color: isDragging ? .black.opacity(0.18) : .clear, radius: 8, y: 4)
-            .offset(isDragging ? dragOffset : .zero)
-            .zIndex(isDragging ? 1 : 0)
-            .contentShape(Rectangle())
-            .pressable()  // ← 按下缩放 + 咔哒触感（DragGesture minDistance 0，不抢 Button action）
-            // ⭐️ 只在编辑模式才挂 拖 + 长按 手势，避免和普通按钮点击冲突
-            .if(editing) { view in
-                view
-                    .gesture(dragGesture(for: act))
-                    .simultaneousGesture(longPressGesture(for: act))
-            }
-        }
-        .buttonStyle(.plain)  // ← 用 plain 系统 ButtonStyle，别叠加任何效果（都在 pressable() 里处理）
-        .disabled(act == .pull && monitor.isPulling)
-        .overlay {
-            if act == .pull && monitor.isPulling {
-                ProgressView().scaleEffect(0.9)
-            }
-        }
-    }
-
-    /// 按钮点击行为：企微/微信/闲鱼 — 按顺序试多个 scheme，能打开就立刻跳（零延迟）
-    private func handleAction(_ act: QuickAction) async {
-        switch act {
-        case .pull:
-            await monitor.pullFromServer()
-            if monitor.pullStatus == "已写入剪贴板" || monitor.pullStatus == "已是最新" {
-                PasteHaptic.pullSuccess()
-            }
-        case .wxwork, .weixin, .xianyu:
-            // 先把"按下时响起的触感"叠一层成功音（让用户知道识别了）
-            PasteHaptic.copy()
-            // 按优先级试多个 URL scheme，第一个能开的就立刻开（completionHandler 版本不用 await，零延迟）
-            for url in act.openURLCandidates {
-                if UIApplication.shared.canOpenURL(url) {
-                    UIApplication.shared.open(url, options: [:], completionHandler: nil)
-                    return
-                }
-            }
-            // 所有 scheme 都打不开 → 兜底跳 App Store 搜索页
-            PasteHaptic.error()
-            let escaped = act.appStoreSearch.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-            if let store = URL(string: "https://apps.apple.com/cn/search?term=\(escaped)") {
-                UIApplication.shared.open(store, options: [:], completionHandler: nil)
-            }
-        }
-    }
-
-    // MARK: - 拖拽 + 长按
-    private func longPressGesture(for act: QuickAction) -> some Gesture {
-        LongPressGesture(minimumDuration: 0.4)
-            .onEnded { success in
-                guard success else { return }
-                // 只要长按就自动进编辑模式
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    editing = true
-                    dragging = act
-                }
-            }
-    }
-
-    private func dragGesture(for act: QuickAction) -> some Gesture {
-        DragGesture(coordinateSpace: .global)
-            .onChanged { val in
-                guard dragging == act else { return }
-                dragOffset = val.translation
-                // 根据当前 translation 推断与哪个按钮位置重叠，然后交换顺序
-                if let targetIndex = actionOrder.firstIndex(of: act),
-                   let draggedIndex = actionOrder.firstIndex(of: act) {
-                    // 通过手指位置推断目标：粗略按 X 方向平移距离计算
-                    let step: CGFloat = 90 // 每格大约 90pt
-                    let offsetIdx = Int(round(val.translation.width / step))
-                    var newIdx = draggedIndex + offsetIdx
-                    newIdx = max(0, min(actionOrder.count - 1, newIdx))
-                    if newIdx != targetIndex {
-                        withAnimation(.interactiveSpring()) {
-                            actionOrder.move(
-                                fromOffsets: IndexSet(integer: draggedIndex),
-                                toOffset: newIdx > draggedIndex ? newIdx + 1 : newIdx
-                            )
-                        }
+            // === 左：拉取 ===
+            Button {
+                Task {
+                    pullInFlight = true
+                    defer { pullInFlight = false }
+                    await monitor.pullFromServer()
+                    if monitor.pullStatus == "已写入剪贴板" || monitor.pullStatus == "已是最新" {
+                        PasteHaptic.pullSuccess()
                     }
                 }
-            }
-            .onEnded { _ in
-                withAnimation(.spring()) {
-                    dragOffset = .zero
-                    dragging = nil
+            } label: {
+                VStack(spacing: 5) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.blue.opacity(0.12))
+                            .frame(width: 60, height: 60)
+                        Image(systemName: "arrow.down.to.line.circle.fill")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 34, height: 34)
+                            .foregroundStyle(.blue)
+                        if pullInFlight || monitor.isPulling {
+                            Circle()
+                                .stroke(Color.blue.opacity(0.5), lineWidth: 2)
+                                .frame(width: 70, height: 70)
+                                .overlay(ProgressView().scaleEffect(0.8))
+                        }
+                    }
+                    Text("拉取")
+                        .font(.caption2)
+                        .foregroundStyle(.primary)
                 }
-                // 松手后保持编辑模式，让用户可以继续拖；下次退出时才保存
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(Color(.secondarySystemGroupedBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
             }
-    }
+            .buttonStyle(.plain)
+            .pressable(scale: 0.95, opacity: 0.85)
+            .disabled(pullInFlight || monitor.isPulling)
 
-    // MARK: - 按钮顺序持久化
-    private func loadButtonOrder() {
-        let raw = settings.quickActionOrderRaw
-        let parts = raw.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-        var loaded: [QuickAction] = []
-        for p in parts {
-            if let a = QuickAction(rawValue: p) { loaded.append(a) }
+            // === 右：粘贴 ===
+            Button {
+                Task {
+                    pasteInFlight = true
+                    defer { pasteInFlight = false }
+                    let result = await monitor.manualPasteAndUpload()
+                    if result == .permissionDenied {
+                        showTCCDeniedAlert = true
+                    }
+                }
+            } label: {
+                VStack(spacing: 5) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.orange.opacity(0.14))
+                            .frame(width: 60, height: 60)
+                        Image(systemName: "doc.on.clipboard.fill")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 34, height: 34)
+                            .foregroundStyle(.orange)
+                        if pasteInFlight || network.isUploading {
+                            Circle()
+                                .stroke(Color.orange.opacity(0.5), lineWidth: 2)
+                                .frame(width: 70, height: 70)
+                                .overlay(ProgressView().scaleEffect(0.8))
+                        }
+                    }
+                    Text("粘贴")
+                        .font(.caption2)
+                        .foregroundStyle(.primary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(Color(.secondarySystemGroupedBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+            }
+            .buttonStyle(.plain)
+            .pressable(scale: 0.95, opacity: 0.85)
+            .disabled(pasteInFlight)
         }
-        // 防止缺项：保证 4 个按钮都存在且不重复
-        for a in QuickAction.allCases where !loaded.contains(a) { loaded.append(a) }
-        if loaded.count > QuickAction.allCases.count {
-            loaded = Array(loaded.prefix(QuickAction.allCases.count))
-        }
-        actionOrder = loaded
-    }
-
-    private func persistButtonOrder() {
-        let raw = actionOrder.map(\.rawValue).joined(separator: ",")
-        settings.quickActionOrderRaw = raw
-    }
-
-    private func resetButtonOrder() {
-        withAnimation {
-            actionOrder = [.pull, .wxwork, .weixin, .xianyu]
-        }
-        persistButtonOrder()
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
     }
 
     // MARK: - 历史列表
