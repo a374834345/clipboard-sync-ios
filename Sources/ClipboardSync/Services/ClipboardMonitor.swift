@@ -45,6 +45,15 @@ final class ClipboardMonitor: ObservableObject {
                                                  name: UIApplication.willEnterForegroundNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(handleBackgroundTick),
                                                  name: .clipboardBackgroundTick, object: nil)
+        // ContentView 用户点历史条目复制时，会把 changeCount 发过来
+        NotificationCenter.default.addObserver(forName: .clipboardSuppressNextChange,
+                                               object: nil, queue: .main) { [weak self] notif in
+            guard let cc = notif.object as? Int else { return }
+            Task { @MainActor [weak self] in
+                self?.suppressChangeCount = cc
+                self?.lastChangeCount = cc
+            }
+        }
     }
 
     deinit {
