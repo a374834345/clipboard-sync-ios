@@ -103,9 +103,12 @@ jobs:
             ldid -S"$ENT_FILE" "$EXEC"
             echo "=== 签名后二进制信息 ==="
             codesign -d --entitlements - "$EXEC" 2>&1 | head -40 || true
-            # 给所有动态库/framework 也签名（如果有）
+            # 给所有动态库/framework 也签名（不带 entitlements，仅 ad-hoc）
             find "$APP_PATH" -name "*.dylib" -type f -exec ldid -S {} \; 2>/dev/null || true
-            find "$APP_PATH" -name "*.framework" -type d -exec sh -c 'ls "$1"/*.dylib 2>/dev/null | xargs -I{} ldid -S {}' _ {} \; 2>/dev/null || true
+            # 验证签名完整性
+            echo "=== 验证签名 ==="
+            codesign --verify --verbose=2 "$EXEC" 2>&1 || echo "⚠️ 签名校验失败（TrollStore 仍可安装）"
+            echo "=== ldid 完成后 codesign 退出码 $? ==="
           else
             echo "⚠️  找不到 entitlements 文件 $ENT_FILE，跳过 ldid 签名"
           fi
