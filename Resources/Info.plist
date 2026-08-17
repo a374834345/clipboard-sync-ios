@@ -69,7 +69,9 @@
         <true/>
     </dict>
 
-    <!-- iOS 17+ 读取剪贴板时不再需要请求权限弹窗，TrollStore 安装默认无弹窗 -->
+    <!-- 剪贴板访问说明：iOS 14+ 读取剪贴板时第一次会询问，用户允许后横幅会减少/消失（TrollStore + 私有 entitlement 可完全不弹） -->
+    <key>NSPasteboardUsageDescription</key>
+    <string>为了自动同步您的剪贴板内容到电脑，本 App 需要读取并写入剪贴板。</string>
     <key>NSUserTrackingUsageDescription</key>
     <string>用于剪贴板同步功能</string>
 </dict>
