@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- TrollStore 安装所需的 entitlements：让 App 拥有更高权限，便于后台保活 -->
+
+    <!-- 允许跳过 App Store 验证 -->
+    <key>get-task-allow</key>
+    <true/>
+
+    <!-- 允许后台运行 -->
+    <key>com.apple.developer.healthkit</key>
+    <false/>
+
+    <!-- 私有 API：允许持续后台运行（TrollStore 注入生效） -->
+    <key>com.apple.multitasking.unlimitedassertions</key>
+    <true/>
+    <key>com.apple.developer.background-modes</key>
+    <array>
+        <string>fetch</string>
+        <string>processing</string>
+        <string>remote-notification</string>
+    </array>
+
+    <!-- 后台任务调度标识 -->
+    <key>com.apple.developer.task-identifiers</key>
+    <array>
+        <string>com.clipboardsync.refresh</string>
+    </array>
+</dict>
+</plist>

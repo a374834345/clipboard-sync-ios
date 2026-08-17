@@ -1,0 +1,59 @@
+name: Build IPA
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: iOS_ClipboardSync
+        run: xcodegen generate
+
+      - name: Build (Release, iPhoneOS, unsigned)
+        working-directory: iOS_ClipboardSync
+        run: |
+          xcodebuild \
+            -project ClipboardSync.xcodeproj \
+            -scheme ClipboardSync \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -sdk iphoneos \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            -derivedDataPath build \
+            build
+
+      - name: Package IPA
+        working-directory: iOS_ClipboardSync
+        run: |
+          APP_PATH=$(find build/Build/Products -name "ClipboardSync.app" -type d | head -1)
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          # 写入 TrollStore 元数据，TrollStore 直接安装即可
+          cat > Payload/ClipboardSync.app/TrollStore.RoothideHash 2>/dev/null || true
+          zip -rq ClipboardSync.ipa Payload
+          rm -rf Payload
+          ls -lh ClipboardSync.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClipboardSync-ipa
+          path: iOS_ClipboardSync/ClipboardSync.ipa
+          retention-days: 30
