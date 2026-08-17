@@ -268,7 +268,8 @@ struct ContentView: View {
                     .foregroundStyle(Color.blue)
                     .clipShape(Capsule())
                 }
-                .buttonStyle(.pressable)
+                .buttonStyle(.plain)
+                .pressable(scale: 0.95, opacity: 0.85)
                 .disabled(pasteInFlight)
             }
             Text("当前剪贴板：")
