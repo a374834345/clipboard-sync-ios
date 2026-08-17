@@ -32,12 +32,21 @@ struct SettingsView: View {
             }
 
             Section("监听设置") {
+                Toggle("自动读取剪贴板（后台轮询）", isOn: $settings.autoMonitor)
+                if settings.autoMonitor {
+                    Text("关闭此项只有点击主页的「粘贴」按钮才读取剪贴板，完全不弹「允许粘贴」横幅。")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
                 Toggle("自动上传剪贴板", isOn: $settings.autoUploadEnabled)
                 Toggle("启动时自动拉取", isOn: $settings.autoPullEnabled)
 
-                VStack(alignment: .leading) {
-                    Text("检查间隔：\(String(format: "%.1f", settings.checkInterval)) 秒")
-                    Slider(value: $settings.checkInterval, in: 0.5...5.0, step: 0.5)
+                if settings.autoMonitor {
+                    VStack(alignment: .leading) {
+                        Text("检查间隔：\(String(format: "%.1f", settings.checkInterval)) 秒")
+                        Slider(value: $settings.checkInterval, in: 0.5...5.0, step: 0.5)
+                    }
                 }
 
                 Stepper("最小内容长度：\(settings.minLength)", value: $settings.minLength, in: 1...20)
