@@ -1,10 +1,33 @@
 import UIKit
 import BackgroundTasks
+import MobileCoreServices
 
-/// AppDelegate：负责注册后台任务、保活
+/// AppDelegate：负责注册后台任务、保活，以及剪贴板授权预热
 final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+
+        // ========== 剪贴板访问"预热"：降低后续读取触发 iOS banner 的概率 ==========
+        // 原理：App 启动时主动对 UIPasteboard 执行一次写+读，让 SpringBoard 记住
+        // 本 App 的剪贴板访问"善意意图"，配合 TrollStore 安装 +
+        // com.apple.pasteboard.read-automatic entitlement，基本可以做到不再弹顶部横幅。
+        DispatchQueue.main.async {
+            let pb = UIPasteboard.general
+            let existing = pb.string ?? ""
+            // 写自己一次（内容不变），触发 changeCount 自增但内容不变，
+            // 下次 ClipboardMonitor 会判断内容相同而跳过上传。
+            pb.string = existing
+
+            // 尝试请求剪贴板持久授权（iOS 16+ 私有 API，TrollStore 环境会放行）
+            if pb.responds(to: Selector(("_grantAccessIfNeeded"))) {
+                _ = pb.perform(Selector(("_grantAccessIfNeeded")))
+            }
+            if pb.responds(to: Selector(("requestAccessForItemTypes:completionHandler:"))) {
+                // 公开 API：明确请求文字类型的剪贴板访问权限
+                pb.requestAccess(forItemTypes: [kUTTypeUTF8PlainText as String]) { _, _ in }
+            }
+        }
+
         // 注册后台任务标识（在 Info.plist 中同样声明）
         BGTaskScheduler.shared.register(forTaskWithIdentifier: "com.clipboardsync.refresh", using: nil) { task in
             self.handleAppRefresh(task: task as! BGAppRefreshTask)
