@@ -11,7 +11,6 @@ enum QuickAction: String, CaseIterable, Identifiable, Codable {
 
     var id: String { rawValue }
 
-    /// 按钮上显示的 SF Symbol
     var icon: String {
         switch self {
         case .pull:   return "arrow.down.to.line.circle.fill"
@@ -21,7 +20,6 @@ enum QuickAction: String, CaseIterable, Identifiable, Codable {
         }
     }
 
-    /// 图标下方文字
     var title: String {
         switch self {
         case .pull:   return "拉取"
@@ -31,7 +29,6 @@ enum QuickAction: String, CaseIterable, Identifiable, Codable {
         }
     }
 
-    /// 图标颜色
     var tint: Color {
         switch self {
         case .pull:   return .blue
@@ -41,17 +38,31 @@ enum QuickAction: String, CaseIterable, Identifiable, Codable {
         }
     }
 
-    /// 跳转 URL（.pull 不跳转，点击时单独处理）
-    var openURL: URL? {
+    /// App Store 搜索兜底文案
+    var appStoreSearch: String {
         switch self {
-        case .pull:   return nil
-        case .wxwork: return URL(string: "wxwork://") ?? URL(string: "wework://")
-        case .weixin: return URL(string: "weixin://") ?? URL(string: "wechat://")
-        case .xianyu:
-            return URL(string: "xianyu://")
-                ?? URL(string: "idlefish://")
-                ?? URL(string: "fleamarket://")
+        case .wxwork: return "企业微信"
+        case .weixin: return "微信"
+        case .xianyu: return "闲鱼"
+        case .pull:   return ""
         }
+    }
+
+    /// 按顺序尝试多个 URL scheme（用户手机可能装的是不同版本，比如老版企微用 wxwork，新版用 wework）
+    var openURLCandidates: [URL] {
+        var arr: [URL] = []
+        switch self {
+        case .pull:   break
+        case .wxwork:
+            ["wxwork://dl/", "wxwork://", "wework://", "safepm://wxwork"].forEach { if let u = URL(string: $0) { arr.append(u) } }
+        case .weixin:
+            ["weixin://dl/", "weixin://", "wechat://"].forEach { if let u = URL(string: $0) { arr.append(u) } }
+        case .xianyu:
+            ["xianyu://", "idlefish://", "fleamarket://", "alipays://platformapi/startapp?appId=20000067"].forEach {
+                if let u = URL(string: $0) { arr.append(u) }
+            }
+        }
+        return arr
     }
 }
 
@@ -96,28 +107,52 @@ enum PasteHaptic {
     }
 }
 
-// MARK: - 按钮按下的视觉反馈样式（缩放 + 暗色蒙层 + 触感）
-struct PressableButtonStyle: ButtonStyle {
-    var pressScale: CGFloat = 0.93
-    var pressedOpacity: Double = 0.75
+// MARK: - 「按下」视觉效果 modifier（不依赖 ButtonStyle，更稳）
+/// 用 DragGesture(minimumDistance:0) 来判断手指是否按着。
+/// 按下瞬间：scale 0.94 + 变暗 + rigid 咔哒；抬起：恢复 + light 软咔哒。
+struct PressableEffect: ViewModifier {
+    var scale: CGFloat = 0.94
+    var opacity: Double = 0.82
+    var dim: Double = 0.07
+    @State private var pressed: Bool = false
 
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? pressScale : 1.0)
-            .opacity(configuration.isPressed ? pressedOpacity : 1.0)
-            .brightness(configuration.isPressed ? -0.06 : 0)
-            .animation(.easeInOut(duration: 0.08), value: configuration.isPressed)
-            .onChange(of: configuration.isPressed) { _, isPressed in
-                if isPressed {
-                    PasteHaptic.pressDown()
-                } else {
-                    PasteHaptic.pressUp()
-                }
-            }
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(pressed ? scale : 1.0)
+            .opacity(pressed ? opacity : 1.0)
+            .brightness(pressed ? -dim : 0)
+            .animation(.easeOut(duration: 0.07), value: pressed)
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        if !pressed {
+                            pressed = true
+                            PasteHaptic.pressDown()
+                        }
+                    }
+                    .onEnded { _ in
+                        if pressed {
+                            pressed = false
+                            PasteHaptic.pressUp()
+                        }
+                    }
+            )
     }
 }
-extension ButtonStyle where Self == PressableButtonStyle {
-    static var pressable: PressableButtonStyle { .init() }
+extension View {
+    func pressable(scale: CGFloat = 0.94, opacity: Double = 0.82) -> some View {
+        self.modifier(PressableEffect(scale: scale, opacity: opacity))
+    }
+
+    /// SwiftUI 没内建的 if：条件为 true 才套用 transform，否则原样返回
+    @ViewBuilder
+    func `if`<Content: View>(_ condition: Bool, transform: (Self) -> Content) -> some View {
+        if condition {
+            transform(self)
+        } else {
+            self
+        }
+    }
 }
 
 struct ContentView: View {
@@ -276,7 +311,7 @@ struct ContentView: View {
         let isDragging = dragging == act
 
         Button {
-            // 编辑模式下点按钮不执行操作
+            // 编辑模式下点按钮不执行操作（此时专门用来拖位置）
             guard !editing else { return }
             Task { await handleAction(act) }
         } label: {
@@ -321,10 +356,15 @@ struct ContentView: View {
             .offset(isDragging ? dragOffset : .zero)
             .zIndex(isDragging ? 1 : 0)
             .contentShape(Rectangle())
-            .gesture(dragGesture(for: act))
-            .simultaneousGesture(longPressGesture(for: act))
+            .pressable()  // ← 按下缩放 + 咔哒触感（DragGesture minDistance 0，不抢 Button action）
+            // ⭐️ 只在编辑模式才挂 拖 + 长按 手势，避免和普通按钮点击冲突
+            .if(editing) { view in
+                view
+                    .gesture(dragGesture(for: act))
+                    .simultaneousGesture(longPressGesture(for: act))
+            }
         }
-        .buttonStyle(.pressable)  // 按下：缩放 + 暗色 + 咔哒触感
+        .buttonStyle(.plain)  // ← 用 plain 系统 ButtonStyle，别叠加任何效果（都在 pressable() 里处理）
         .disabled(act == .pull && monitor.isPulling)
         .overlay {
             if act == .pull && monitor.isPulling {
@@ -333,7 +373,7 @@ struct ContentView: View {
         }
     }
 
-    /// 按钮点击行为：企微/微信/闲鱼立即跳转（同步 open，秒切不用 async）
+    /// 按钮点击行为：企微/微信/闲鱼 — 按顺序试多个 scheme，能打开就立刻跳（零延迟）
     private func handleAction(_ act: QuickAction) async {
         switch act {
         case .pull:
@@ -342,25 +382,20 @@ struct ContentView: View {
                 PasteHaptic.pullSuccess()
             }
         case .wxwork, .weixin, .xianyu:
-            guard let url = act.openURL else { return }
-            if UIApplication.shared.canOpenURL(url) {
-                // 用同步 completionHandler 版本，按下去就立刻切，零延迟
-                PasteHaptic.copy()
-                UIApplication.shared.open(url, options: [:], completionHandler: nil)
-            } else {
-                PasteHaptic.error()
-                // 兜底跳 App Store 搜索页
-                let search: String
-                switch act {
-                case .wxwork: search = "企业微信"
-                case .weixin: search = "微信"
-                case .xianyu: search = "闲鱼"
-                default:      search = ""
+            // 先把"按下时响起的触感"叠一层成功音（让用户知道识别了）
+            PasteHaptic.copy()
+            // 按优先级试多个 URL scheme，第一个能开的就立刻开（completionHandler 版本不用 await，零延迟）
+            for url in act.openURLCandidates {
+                if UIApplication.shared.canOpenURL(url) {
+                    UIApplication.shared.open(url, options: [:], completionHandler: nil)
+                    return
                 }
-                let escaped = search.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-                if let store = URL(string: "https://apps.apple.com/cn/search?term=\(escaped)") {
-                    UIApplication.shared.open(store, options: [:], completionHandler: nil)
-                }
+            }
+            // 所有 scheme 都打不开 → 兜底跳 App Store 搜索页
+            PasteHaptic.error()
+            let escaped = act.appStoreSearch.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+            if let store = URL(string: "https://apps.apple.com/cn/search?term=\(escaped)") {
+                UIApplication.shared.open(store, options: [:], completionHandler: nil)
             }
         }
     }
